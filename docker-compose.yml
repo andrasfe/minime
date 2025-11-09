@@ -1,0 +1,55 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: digital-me-postgres
+    environment:
+      POSTGRES_USER: digitalme
+      POSTGRES_PASSWORD: digitalme
+      POSTGRES_DB: digitalme
+    ports:
+      - "5432:5432"
+    volumes:
+      # Persistent storage for database files
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U digitalme -d digitalme"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - digital-me-network
+
+  mcp-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: digital-me-mcp-server
+    environment:
+      DATABASE_URL: postgresql://digitalme:digitalme@postgres:5432/digitalme
+      LLM_PROVIDER: ${LLM_PROVIDER:-openai}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o}
+      OPENAI_EMBEDDINGS_MODEL: ${OPENAI_EMBEDDINGS_MODEL:-text-embedding-3-small}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-3-5-sonnet-20241022}
+      EMBEDDINGS_PROVIDER: ${EMBEDDINGS_PROVIDER:-openai}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - digital-me-network
+    # Keep container running for MCP server
+    stdin_open: true
+    tty: true
+
+volumes:
+  postgres_data:
+    driver: local
+    name: digital-me-postgres-data
+
+networks:
+  digital-me-network:
+    driver: bridge
+
