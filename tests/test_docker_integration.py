@@ -246,7 +246,7 @@ class TestDockerDatabaseOperations:
              patch('mcp_server.get_embeddings', return_value=mock_embeddings):
             
             # Store a summary
-            result = mcp_server.store_chat_summary("Test summary for Docker")
+            result = mcp_server.store_chat_summary.fn("Test summary for Docker")
             
             assert result["status"] == "success"
             assert "chat_id" in result
@@ -292,7 +292,7 @@ class TestDockerVolumePersistence:
              patch('mcp_server.get_embeddings', return_value=mock_embeddings):
             
             # Store data
-            mcp_server.store_chat_summary("Test data for persistence")
+            mcp_server.store_chat_summary.fn("Test data for persistence")
         
         # Get the chat_id
         with db_connection.cursor() as cur:

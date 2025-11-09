@@ -99,8 +99,8 @@ class TestStoreChatSummary:
         mock_cursor.fetchone.return_value = mock_result
         mock_get_db_conn.return_value = mock_conn
         
-        # Execute
-        result = mcp_server.store_chat_summary("Test summary")
+        # Execute - access the underlying function from the tool
+        result = mcp_server.store_chat_summary.fn("Test summary")
         
         # Assertions
         assert result["status"] == "success"
@@ -119,7 +119,7 @@ class TestStoreChatSummary:
         """Test error handling in store_chat_summary"""
         mock_get_llm.side_effect = Exception("LLM error")
         
-        result = mcp_server.store_chat_summary("Test summary")
+        result = mcp_server.store_chat_summary.fn("Test summary")
         
         assert result["status"] == "error"
         assert "error" in result["message"].lower()
@@ -142,7 +142,7 @@ class TestGetDigitalMe:
         mock_cursor.fetchone.return_value = mock_result
         mock_get_db_conn.return_value = mock_conn
         
-        result = mcp_server.get_digital_me()
+        result = mcp_server.get_digital_me.fn()
         
         assert result["status"] == "success"
         assert result["summary"] == "Test summary"
@@ -159,7 +159,7 @@ class TestGetDigitalMe:
         mock_cursor.fetchone.return_value = None
         mock_get_db_conn.return_value = mock_conn
         
-        result = mcp_server.get_digital_me()
+        result = mcp_server.get_digital_me.fn()
         
         assert result["status"] == "success"
         assert result["summary"] == ""
@@ -170,7 +170,7 @@ class TestGetDigitalMe:
         """Test error handling in get_digital_me"""
         mock_init_db.side_effect = Exception("Database error")
         
-        result = mcp_server.get_digital_me()
+        result = mcp_server.get_digital_me.fn()
         
         assert result["status"] == "error"
         assert "error" in result["message"].lower()
@@ -208,8 +208,8 @@ class TestAnswerQuestion:
         mock_cursor.fetchone.return_value = {'summary_text': 'Digital me summary'}
         mock_get_db_conn.return_value = mock_conn
         
-        # Execute
-        result = mcp_server.answer_question("Is Andras interested in quantum computing?")
+        # Execute - access the underlying function from the tool
+        result = mcp_server.answer_question.fn("Is Andras interested in quantum computing?")
         
         # Assertions
         assert result["status"] == "success"
@@ -225,7 +225,7 @@ class TestAnswerQuestion:
         """Test error handling in answer_question"""
         mock_init_db.side_effect = Exception("Database error")
         
-        result = mcp_server.answer_question("Test question?")
+        result = mcp_server.answer_question.fn("Test question?")
         
         assert result["status"] == "error"
         assert "error" in result["message"].lower()

@@ -27,13 +27,31 @@ All reasoning, processing, and decision-making is handled by external AI models.
 
 ## Setup
 
-### 1. Install Dependencies
+### 1. Create Virtual Environment
+
+It's recommended to use a virtual environment to isolate dependencies:
 
 ```bash
+# Create virtual environment
+python3 -m venv venv
+
+# Activate virtual environment
+# On Linux/Mac:
+source venv/bin/activate
+
+# On Windows:
+# venv\Scripts\activate
+```
+
+### 2. Install Dependencies
+
+```bash
+# Make sure virtual environment is activated
+pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-### 2. Set Up PostgreSQL with pgvector
+### 3. Set Up PostgreSQL with pgvector
 
 ```bash
 # Install pgvector extension in your PostgreSQL database
@@ -64,7 +82,14 @@ ANTHROPIC_MODEL=claude-3-5-sonnet-20241022
 EMBEDDINGS_PROVIDER=openai
 ```
 
-### 4. Run the Server
+### 5. Run the Server
+
+**Make sure your virtual environment is activated:**
+```bash
+source venv/bin/activate  # Linux/Mac
+# or
+venv\Scripts\activate      # Windows
+```
 
 The server can be run in two modes:
 
@@ -206,10 +231,25 @@ All reasoning is delegated to external AI models via LangChain.
 
 The project includes comprehensive unit and integration tests.
 
+### Setup for Testing
+
+1. **Activate your virtual environment:**
+   ```bash
+   source venv/bin/activate  # Linux/Mac
+   # or
+   venv\Scripts\activate    # Windows
+   ```
+
+2. **Install test dependencies (if not already installed):**
+   ```bash
+   pip install -r requirements.txt
+   ```
+
 ### Running Tests
 
 **Run all tests:**
 ```bash
+# Make sure virtual environment is activated
 pytest
 ```
 
@@ -224,9 +264,46 @@ export TEST_DATABASE_URL=postgresql://user:password@localhost:5432/test_db
 pytest tests/test_integration.py -m integration
 ```
 
+**Run only Docker integration tests (requires Docker):**
+```bash
+pytest tests/test_docker_integration.py -m docker -v
+```
+
 **Run with coverage:**
 ```bash
 pytest --cov=mcp_server --cov-report=html
+```
+
+**Run specific test file:**
+```bash
+pytest tests/test_unit.py::TestStoreChatSummary -v
+```
+
+### Test Examples
+
+**Complete test workflow in virtual environment:**
+```bash
+# 1. Create and activate venv
+python3 -m venv venv
+source venv/bin/activate
+
+# 2. Install dependencies
+pip install -r requirements.txt
+
+# 3. Run unit tests (no external dependencies)
+pytest tests/test_unit.py -v
+
+# 4. Run integration tests (requires database)
+export TEST_DATABASE_URL=postgresql://user:password@localhost:5432/test_db
+pytest tests/test_integration.py -m integration -v
+
+# 5. Run all tests with coverage
+pytest --cov=mcp_server --cov-report=term-missing
+```
+
+**Deactivate virtual environment when done:**
+```bash
+deactivate
 ```
 
 See `tests/README.md` for detailed testing documentation.

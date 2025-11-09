@@ -145,7 +145,7 @@ class TestStoreChatSummaryIntegration:
         
         with patch.dict('os.environ', {'DATABASE_URL': test_db_url}):
             mcp_server.init_database()
-            mcp_server.store_chat_summary(sample_chat_summary)
+            mcp_server.store_chat_summary.fn(sample_chat_summary)
         
         # Verify digital_me was updated
         conn = clean_test_db
@@ -164,7 +164,7 @@ class TestGetDigitalMeIntegration:
         """Test that get_digital_me returns empty summary initially"""
         with patch.dict('os.environ', {'DATABASE_URL': test_db_url}):
             mcp_server.init_database()
-            result = mcp_server.get_digital_me()
+            result = mcp_server.get_digital_me.fn()
         
         assert result["status"] == "success"
         assert result["summary"] == ""
@@ -192,8 +192,8 @@ class TestGetDigitalMeIntegration:
         
         with patch.dict('os.environ', {'DATABASE_URL': test_db_url}):
             mcp_server.init_database()
-            mcp_server.store_chat_summary(sample_chat_summary)
-            result = mcp_server.get_digital_me()
+            mcp_server.store_chat_summary.fn(sample_chat_summary)
+            result = mcp_server.get_digital_me.fn()
         
         assert result["status"] == "success"
         assert result["summary"] == "Updated digital me"
@@ -241,10 +241,10 @@ class TestAnswerQuestionIntegration:
         with patch.dict('os.environ', {'DATABASE_URL': test_db_url}):
             mcp_server.init_database()
             # Store a summary first
-            mcp_server.store_chat_summary(sample_chat_summary)
+            mcp_server.store_chat_summary.fn(sample_chat_summary)
             
             # Now answer a question
-            result = mcp_server.answer_question("Is Andras interested in quantum computing?")
+            result = mcp_server.answer_question.fn("Is Andras interested in quantum computing?")
         
         assert result["status"] == "success"
         assert "answer" in result
@@ -270,7 +270,7 @@ class TestAnswerQuestionIntegration:
         
         with patch.dict('os.environ', {'DATABASE_URL': test_db_url}):
             mcp_server.init_database()
-            result = mcp_server.answer_question("Is Andras interested in quantum computing?")
+            result = mcp_server.answer_question.fn("Is Andras interested in quantum computing?")
         
         assert result["status"] == "success"
         assert "answer" in result
@@ -332,7 +332,7 @@ class TestVectorSearch:
                 conn.commit()
             
             # Answer a question about quantum computing
-            result = mcp_server.answer_question("Tell me about quantum computing")
+            result = mcp_server.answer_question.fn("Tell me about quantum computing")
         
         assert result["status"] == "success"
         # The answer should be based on the quantum computing summary

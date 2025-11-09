@@ -7,12 +7,38 @@ This directory contains comprehensive unit and integration tests for the MCP ser
 - **`conftest.py`**: Pytest fixtures and configuration
 - **`test_unit.py`**: Unit tests using mocks (no database required)
 - **`test_integration.py`**: Integration tests using a real test database
+- **`test_docker_integration.py`**: Docker integration tests
+
+## Setup
+
+### 1. Create Virtual Environment
+
+```bash
+# Create virtual environment
+python3 -m venv venv
+
+# Activate virtual environment
+# On Linux/Mac:
+source venv/bin/activate
+
+# On Windows:
+# venv\Scripts\activate
+```
+
+### 2. Install Dependencies
+
+```bash
+# Make sure virtual environment is activated
+pip install --upgrade pip
+pip install -r requirements.txt
+```
 
 ## Running Tests
 
 ### Run All Tests
 
 ```bash
+# Make sure virtual environment is activated
 pytest
 ```
 
@@ -25,7 +51,14 @@ pytest tests/test_unit.py
 ### Run Only Integration Tests
 
 ```bash
+export TEST_DATABASE_URL=postgresql://user:password@localhost:5432/test_db
 pytest tests/test_integration.py -m integration
+```
+
+### Run Docker Integration Tests
+
+```bash
+pytest tests/test_docker_integration.py -m docker -v
 ```
 
 ### Run with Coverage
@@ -35,6 +68,33 @@ pytest --cov=mcp_server --cov-report=html
 ```
 
 Coverage report will be generated in `htmlcov/index.html`
+
+### Complete Test Workflow Example
+
+```bash
+# 1. Create and activate venv
+python3 -m venv venv
+source venv/bin/activate
+
+# 2. Install dependencies
+pip install -r requirements.txt
+
+# 3. Run unit tests (fast, no external dependencies)
+pytest tests/test_unit.py -v
+
+# 4. Run integration tests (requires database)
+export TEST_DATABASE_URL=postgresql://user:password@localhost:5432/test_db
+pytest tests/test_integration.py -m integration -v
+
+# 5. Run Docker tests (requires Docker)
+pytest tests/test_docker_integration.py -m docker -v
+
+# 6. Run all tests with coverage
+pytest --cov=mcp_server --cov-report=term-missing --cov-report=html
+
+# 7. Deactivate venv when done
+deactivate
+```
 
 ## Test Configuration
 
