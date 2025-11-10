@@ -15,6 +15,8 @@ from unittest.mock import patch, Mock
 
 import mcp_server
 
+EMBED_DIM = 4096
+
 
 @pytest.mark.integration
 class TestDatabaseInitialization:
@@ -56,13 +58,20 @@ class TestDatabaseInitialization:
         
         conn = clean_test_db
         with conn.cursor() as cur:
-            cur.execute("""
+            cur.execute(
+                """
                 SELECT EXISTS (
                     SELECT FROM pg_indexes 
                     WHERE indexname = 'chat_summaries_embedding_idx'
                 );
-            """)
-            assert cur.fetchone()[0] is True
+            """
+            )
+            exists = cur.fetchone()[0]
+            embedding_dim = int(os.getenv("EMBEDDING_DIMENSION", "0") or "0")
+            if embedding_dim and embedding_dim > 2000:
+                assert exists is False
+            else:
+                assert exists is True
     
     def test_init_database_initializes_digital_me(self, clean_test_db, test_db_url):
         """Test that init_database creates initial digital_me record"""
@@ -97,13 +106,13 @@ class TestStoreChatSummaryIntegration:
         mock_get_llm.return_value = mock_llm
         
         mock_embeddings = Mock()
-        test_embedding = [0.1] * 1536
+        test_embedding = [0.1] * EMBED_DIM
         mock_embeddings.embed_query.return_value = test_embedding
         mock_get_embeddings.return_value = mock_embeddings
         
-        with patch.dict('os.environ', {'DATABASE_URL': test_db_url}):
+        with patch.dict('os.environ', {'DATABASE_URL': test_db_url, 'EMBEDDING_DIMENSION': str(EMBED_DIM)}):
             mcp_server.init_database()
-            result = mcp_server.store_chat_summary(sample_chat_summary)
+            result = mcp_server.store_chat_summary.fn(sample_chat_summary)
         
         # Verify result
         assert result["status"] == "success"
@@ -139,11 +148,11 @@ class TestStoreChatSummaryIntegration:
         mock_get_llm.return_value = mock_llm
         
         mock_embeddings = Mock()
-        test_embedding = [0.1] * 1536
+        test_embedding = [0.1] * EMBED_DIM
         mock_embeddings.embed_query.return_value = test_embedding
         mock_get_embeddings.return_value = mock_embeddings
         
-        with patch.dict('os.environ', {'DATABASE_URL': test_db_url}):
+        with patch.dict('os.environ', {'DATABASE_URL': test_db_url, 'EMBEDDING_DIMENSION': str(EMBED_DIM)}):
             mcp_server.init_database()
             mcp_server.store_chat_summary.fn(sample_chat_summary)
         
@@ -186,11 +195,11 @@ class TestGetDigitalMeIntegration:
         mock_get_llm.return_value = mock_llm
         
         mock_embeddings = Mock()
-        test_embedding = [0.1] * 1536
+        test_embedding = [0.1] * EMBED_DIM
         mock_embeddings.embed_query.return_value = test_embedding
         mock_get_embeddings.return_value = mock_embeddings
         
-        with patch.dict('os.environ', {'DATABASE_URL': test_db_url}):
+        with patch.dict('os.environ', {'DATABASE_URL': test_db_url, 'EMBEDDING_DIMENSION': str(EMBED_DIM)}):
             mcp_server.init_database()
             mcp_server.store_chat_summary.fn(sample_chat_summary)
             result = mcp_server.get_digital_me.fn()
@@ -226,19 +235,22 @@ class TestAnswerQuestionIntegration:
         mock_llm_answer.invoke.return_value = mock_llm_answer_response
         
         # Use different mocks for different calls
+        call_tracker = {"count": 0}
+
         def get_llm_side_effect():
-            if mock_llm_store.invoke.call_count <= 2:
+            call_tracker["count"] += 1
+            if call_tracker["count"] <= 2:
                 return mock_llm_store
             return mock_llm_answer
         
         mock_get_llm.side_effect = get_llm_side_effect
         
         mock_embeddings = Mock()
-        test_embedding = [0.1] * 1536
+        test_embedding = [0.1] * EMBED_DIM
         mock_embeddings.embed_query.return_value = test_embedding
         mock_get_embeddings.return_value = mock_embeddings
         
-        with patch.dict('os.environ', {'DATABASE_URL': test_db_url}):
+        with patch.dict('os.environ', {'DATABASE_URL': test_db_url, 'EMBEDDING_DIMENSION': str(EMBED_DIM)}):
             mcp_server.init_database()
             # Store a summary first
             mcp_server.store_chat_summary.fn(sample_chat_summary)
@@ -264,11 +276,11 @@ class TestAnswerQuestionIntegration:
         mock_get_llm.return_value = mock_llm
         
         mock_embeddings = Mock()
-        test_embedding = [0.1] * 1536
+        test_embedding = [0.1] * EMBED_DIM
         mock_embeddings.embed_query.return_value = test_embedding
         mock_get_embeddings.return_value = mock_embeddings
         
-        with patch.dict('os.environ', {'DATABASE_URL': test_db_url}):
+        with patch.dict('os.environ', {'DATABASE_URL': test_db_url, 'EMBEDDING_DIMENSION': str(EMBED_DIM)}):
             mcp_server.init_database()
             result = mcp_server.answer_question.fn("Is Andras interested in quantum computing?")
         
@@ -288,8 +300,8 @@ class TestVectorSearch:
     ):
         """Test that vector similarity search works correctly"""
         # Create different embeddings for different summaries
-        embedding1 = [0.9] * 1536  # Similar to query
-        embedding2 = [0.1] * 1536  # Different from query
+        embedding1 = [0.9] * EMBED_DIM  # Similar to query
+        embedding2 = [0.1] * EMBED_DIM  # Different from query
         
         mock_llm = Mock()
         mock_llm_response1 = Mock()
@@ -311,7 +323,7 @@ class TestVectorSearch:
         mock_embeddings.embed_query.side_effect = embed_side_effect
         mock_get_embeddings.return_value = mock_embeddings
         
-        with patch.dict('os.environ', {'DATABASE_URL': test_db_url}):
+        with patch.dict('os.environ', {'DATABASE_URL': test_db_url, 'EMBEDDING_DIMENSION': str(EMBED_DIM)}):
             mcp_server.init_database()
             
             # Store two summaries with different embeddings

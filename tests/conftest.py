@@ -14,6 +14,17 @@ from pgvector.psycopg2 import register_vector
 # Load test environment variables
 load_dotenv()
 
+TEST_EMBEDDING_DIMENSION = 4096
+
+
+@pytest.fixture(autouse=True)
+def default_env(monkeypatch):
+    """Ensure consistent environment configuration for tests."""
+    monkeypatch.setenv("EMBEDDING_PROVIDER", "cohere-v2")
+    monkeypatch.setenv("EMBEDDING_MODEL", "embed-english-v2.0")
+    monkeypatch.setenv("EMBEDDING_DIMENSION", str(TEST_EMBEDDING_DIMENSION))
+    yield
+
 
 @pytest.fixture
 def mock_llm():
@@ -29,15 +40,15 @@ def mock_llm():
 def mock_embeddings():
     """Mock embeddings client"""
     mock = Mock()
-    # Return a mock embedding vector (1536 dimensions for OpenAI)
-    mock.embed_query.return_value = [0.1] * 1536
+    # Return a mock embedding vector matching configured dimension
+    mock.embed_query.return_value = [0.1] * TEST_EMBEDDING_DIMENSION
     return mock
 
 
 @pytest.fixture
 def sample_embedding():
     """Sample embedding vector for testing"""
-    return np.array([0.1] * 1536, dtype=np.float32)
+    return np.array([0.1] * TEST_EMBEDDING_DIMENSION, dtype=np.float32)
 
 
 @pytest.fixture
@@ -53,6 +64,9 @@ def test_db_url():
 def test_db_connection(test_db_url):
     """Create a test database connection"""
     conn = psycopg2.connect(test_db_url)
+    with conn.cursor() as cur:
+        cur.execute("CREATE EXTENSION IF NOT EXISTS vector;")
+        conn.commit()
     register_vector(conn)
     yield conn
     conn.close()

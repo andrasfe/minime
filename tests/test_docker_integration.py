@@ -13,6 +13,8 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 from pgvector.psycopg2 import register_vector
 
+EMBED_DIM = 4096
+
 
 @pytest.fixture(scope="module")
 def docker_compose():
@@ -203,6 +205,7 @@ class TestDockerDatabaseOperations:
         
         # Set database URL for Docker
         os.environ['DATABASE_URL'] = 'postgresql://digitalme:digitalme@localhost:5432/digitalme'
+        os.environ['EMBEDDING_DIMENSION'] = str(EMBED_DIM)
         
         # Initialize database
         mcp_server.init_database()
@@ -232,6 +235,7 @@ class TestDockerDatabaseOperations:
         
         # Set database URL for Docker
         os.environ['DATABASE_URL'] = 'postgresql://digitalme:digitalme@localhost:5432/digitalme'
+        os.environ['EMBEDDING_DIMENSION'] = str(EMBED_DIM)
         
         # Setup mocks
         mock_llm = Mock()
@@ -240,7 +244,7 @@ class TestDockerDatabaseOperations:
         mock_llm.invoke.return_value = mock_llm_response
         
         mock_embeddings = Mock()
-        mock_embeddings.embed_query.return_value = [0.1] * 1536
+        mock_embeddings.embed_query.return_value = [0.1] * EMBED_DIM
         
         with patch('mcp_server.get_llm', return_value=mock_llm), \
              patch('mcp_server.get_embeddings', return_value=mock_embeddings):
@@ -276,6 +280,7 @@ class TestDockerVolumePersistence:
         
         # Set database URL for Docker
         os.environ['DATABASE_URL'] = 'postgresql://digitalme:digitalme@localhost:5432/digitalme'
+        os.environ['EMBEDDING_DIMENSION'] = str(EMBED_DIM)
         
         # Setup mocks
         mock_llm = Mock()
@@ -286,7 +291,7 @@ class TestDockerVolumePersistence:
         mock_llm.invoke.side_effect = [mock_llm_response1, mock_llm_response2]
         
         mock_embeddings = Mock()
-        mock_embeddings.embed_query.return_value = [0.1] * 1536
+        mock_embeddings.embed_query.return_value = [0.1] * EMBED_DIM
         
         with patch('mcp_server.get_llm', return_value=mock_llm), \
              patch('mcp_server.get_embeddings', return_value=mock_embeddings):
@@ -349,6 +354,7 @@ class TestDockerNetwork:
         # Set database URL for Docker (using postgres hostname for container-to-container)
         # But we'll test from host, so use localhost
         os.environ['DATABASE_URL'] = 'postgresql://digitalme:digitalme@localhost:5432/digitalme'
+        os.environ['EMBEDDING_DIMENSION'] = str(EMBED_DIM)
         
         # This should work if networking is correct
         try:

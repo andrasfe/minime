@@ -18,13 +18,14 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 from psycopg2.pool import ThreadedConnectionPool
 from dotenv import load_dotenv
+import fastmcp
 from fastmcp import FastMCP
-from langchain_openai import ChatOpenAI, OpenAIEmbeddings
-from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.prompts import ChatPromptTemplate
 import numpy as np
 from pgvector.psycopg2 import register_vector
+
+from ai_providers import CohereEmbeddingsClient, OpenRouterChat
 
 # Load environment variables
 load_dotenv()
@@ -40,28 +41,45 @@ llm = None
 embeddings = None
 
 
+def get_embedding_dimension() -> int:
+    """Determine embedding dimensionality based on configuration."""
+    env_dim = os.getenv("EMBEDDING_DIMENSION")
+    if env_dim:
+        try:
+            value = int(env_dim)
+            if value <= 0:
+                raise ValueError
+            return value
+        except ValueError as exc:
+            raise ValueError("EMBEDDING_DIMENSION must be a positive integer") from exc
+    provider = os.getenv("EMBEDDING_PROVIDER", "cohere-v2").lower()
+    if provider in {"cohere", "cohere-v2"}:
+        model_name = os.getenv("EMBEDDING_MODEL", "").lower()
+        if "v3" in model_name or "small" in model_name:
+            return 1024
+        return 4096
+    return 1536
+
+
 def get_llm():
     """Initialize LLM based on .env configuration"""
     global llm
     if llm is not None:
         return llm
-    
-    provider = os.getenv("LLM_PROVIDER", "openai").lower()
-    
-    if provider == "openai":
-        api_key = os.getenv("OPENAI_API_KEY")
-        model = os.getenv("OPENAI_MODEL", "gpt-4o")
-        if not api_key:
-            raise ValueError("OPENAI_API_KEY not found in .env")
-        llm = ChatOpenAI(model=model, api_key=api_key, temperature=0.7)
-    elif provider == "anthropic":
-        api_key = os.getenv("ANTHROPIC_API_KEY")
-        model = os.getenv("ANTHROPIC_MODEL", "claude-3-5-sonnet-20241022")
-        if not api_key:
-            raise ValueError("ANTHROPIC_API_KEY not found in .env")
-        llm = ChatAnthropic(model=model, api_key=api_key, temperature=0.7)
-    else:
-        raise ValueError(f"Unsupported LLM_PROVIDER: {provider}. Use 'openai' or 'anthropic'")
+    api_key = os.getenv("OPENROUTER_API_KEY")
+    model = os.getenv("OPENROUTER_MODEL")
+    base_url = os.getenv("OPENROUTER_URL", "https://openrouter.ai/api/v1")
+    temperature = float(os.getenv("LLM_TEMPERATURE", "0.7"))
+    if not api_key:
+        raise ValueError("OPENROUTER_API_KEY not found in .env")
+    if not model:
+        raise ValueError("OPENROUTER_MODEL not found in .env")
+    llm = OpenRouterChat(
+        api_key=api_key,
+        model=model,
+        base_url=base_url,
+        temperature=temperature,
+    )
     
     return llm
 
@@ -71,17 +89,17 @@ def get_embeddings():
     global embeddings
     if embeddings is not None:
         return embeddings
-    
-    provider = os.getenv("EMBEDDINGS_PROVIDER", "openai").lower()
-    
-    if provider == "openai":
-        api_key = os.getenv("OPENAI_API_KEY")
-        model = os.getenv("OPENAI_EMBEDDINGS_MODEL", "text-embedding-3-small")
-        if not api_key:
-            raise ValueError("OPENAI_API_KEY not found in .env")
-        embeddings = OpenAIEmbeddings(model=model, openai_api_key=api_key)
-    else:
-        raise ValueError(f"Unsupported EMBEDDINGS_PROVIDER: {provider}. Use 'openai'")
+    provider = os.getenv("EMBEDDING_PROVIDER", "cohere-v2").lower()
+    if provider not in {"cohere", "cohere-v2"}:
+        raise ValueError(
+            f"Unsupported EMBEDDING_PROVIDER: {provider}. Use 'cohere' or 'cohere-v2'"
+        )
+    api_key = os.getenv("COHERE_API_KEY")
+    model = os.getenv("EMBEDDING_MODEL", "embed-english-v2.0")
+    truncate = os.getenv("COHERE_TRUNCATE", "END") or None
+    if not api_key:
+        raise ValueError("COHERE_API_KEY not found in .env")
+    embeddings = CohereEmbeddingsClient(api_key=api_key, model=model, truncate=truncate)
     
     return embeddings
 
@@ -115,35 +133,81 @@ def init_database():
             # Enable pgvector extension
             cur.execute("CREATE EXTENSION IF NOT EXISTS vector;")
             
+            embedding_dimension = get_embedding_dimension()
+            
             # Create chat_summaries table
-            cur.execute("""
+            cur.execute(
+                f"""
                 CREATE TABLE IF NOT EXISTS chat_summaries (
                     id SERIAL PRIMARY KEY,
                     summary_text TEXT NOT NULL,
-                    embedding vector(1536),
-                    metadata JSONB DEFAULT '{}'::jsonb,
+                    embedding vector({embedding_dimension}),
+                    metadata JSONB DEFAULT '{{}}'::jsonb,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
-            """)
+                """
+            )
             
             # Create digital_me table (single record)
-            cur.execute("""
+            cur.execute(
+                f"""
                 CREATE TABLE IF NOT EXISTS digital_me (
                     id INTEGER PRIMARY KEY DEFAULT 1,
                     summary_text TEXT NOT NULL DEFAULT '',
-                    embedding vector(1536),
+                    embedding vector({embedding_dimension}),
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     CONSTRAINT single_record CHECK (id = 1)
                 );
-            """)
+                """
+            )
+            
+            # Validate embedding dimensions if tables already exist
+            cur.execute(
+                """
+                SELECT atttypmod AS dimension
+                FROM pg_attribute
+                WHERE attrelid = 'chat_summaries'::regclass
+                  AND attname = 'embedding';
+                """
+            )
+            chat_dimension = cur.fetchone()
+            if (
+                chat_dimension
+                and chat_dimension[0] not in (None, -1, embedding_dimension)
+            ):
+                raise ValueError(
+                    f"chat_summaries.embedding has dimension {chat_dimension[0]} but configuration expects {embedding_dimension}. "
+                    "Please migrate or adjust EMBEDDING_DIMENSION."
+                )
+            
+            cur.execute(
+                """
+                SELECT atttypmod AS dimension
+                FROM pg_attribute
+                WHERE attrelid = 'digital_me'::regclass
+                  AND attname = 'embedding';
+                """
+            )
+            digital_me_dimension = cur.fetchone()
+            if (
+                digital_me_dimension
+                and digital_me_dimension[0] not in (None, -1, embedding_dimension)
+            ):
+                raise ValueError(
+                    f"digital_me.embedding has dimension {digital_me_dimension[0]} but configuration expects {embedding_dimension}. "
+                    "Please migrate or adjust EMBEDDING_DIMENSION."
+                )
             
             # Create index for vector similarity search
-            cur.execute("""
-                CREATE INDEX IF NOT EXISTS chat_summaries_embedding_idx 
-                ON chat_summaries USING ivfflat (embedding vector_cosine_ops)
-                WITH (lists = 100);
-            """)
+            if embedding_dimension <= 2000:
+                cur.execute(
+                    """
+                    CREATE INDEX IF NOT EXISTS chat_summaries_embedding_idx 
+                    ON chat_summaries USING ivfflat (embedding vector_cosine_ops)
+                    WITH (lists = 100);
+                """
+                )
             
             # Initialize digital_me if it doesn't exist
             cur.execute("""
@@ -455,5 +519,7 @@ if __name__ == "__main__":
     init_database()
     
     # Run the MCP server
-    mcp.run()
+    host = os.getenv("MCP_SERVER_HOST", fastmcp.settings.host)
+    port = int(os.getenv("MCP_SERVER_PORT", fastmcp.settings.port))
+    mcp.run(transport="streamable-http", host=host, port=port)
 

@@ -1,1 +1,11 @@
 .env
+venv/
+__pycache__/
+*.py[cod]
+*.so
+.coverage
+htmlcov/
+backups/
+*.log
+history/*/conversations_processed/
+history/openAI/*

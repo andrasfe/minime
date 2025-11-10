@@ -11,60 +11,66 @@ from datetime import datetime
 
 import mcp_server
 
+EMBED_DIM = 4096
+
 
 class TestGetLLM:
     """Test LLM initialization"""
     
-    @patch.dict('os.environ', {'LLM_PROVIDER': 'openai', 'OPENAI_API_KEY': 'test-key'})
-    @patch('mcp_server.ChatOpenAI')
-    def test_get_llm_openai(self, mock_chat_openai):
-        """Test OpenAI LLM initialization"""
+    @patch.dict(
+        'os.environ',
+        {
+            'OPENROUTER_API_KEY': 'test-key',
+            'OPENROUTER_MODEL': 'moonshotai/kimi-k2-thinking',
+            'OPENROUTER_URL': 'https://openrouter.ai/api/v1',
+        },
+        clear=True,
+    )
+    @patch('mcp_server.OpenRouterChat')
+    def test_get_llm_openrouter(self, mock_openrouter_chat):
+        """Test OpenRouter LLM initialization"""
         mock_llm = Mock()
-        mock_chat_openai.return_value = mock_llm
+        mock_openrouter_chat.return_value = mock_llm
         
         result = mcp_server.get_llm()
         
         assert result == mock_llm
-        mock_chat_openai.assert_called_once()
+        mock_openrouter_chat.assert_called_once()
     
-    @patch.dict('os.environ', {'LLM_PROVIDER': 'anthropic', 'ANTHROPIC_API_KEY': 'test-key'})
-    @patch('mcp_server.ChatAnthropic')
-    def test_get_llm_anthropic(self, mock_chat_anthropic):
-        """Test Anthropic LLM initialization"""
-        mock_llm = Mock()
-        mock_chat_anthropic.return_value = mock_llm
-        
-        result = mcp_server.get_llm()
-        
-        assert result == mock_llm
-        mock_chat_anthropic.assert_called_once()
-    
-    @patch.dict('os.environ', {'LLM_PROVIDER': 'openai'}, clear=True)
+    @patch.dict('os.environ', {'OPENROUTER_MODEL': 'test-model'}, clear=True)
     def test_get_llm_missing_api_key(self):
         """Test LLM initialization fails without API key"""
-        with pytest.raises(ValueError, match="OPENAI_API_KEY not found"):
+        with pytest.raises(ValueError, match="OPENROUTER_API_KEY not found"):
             mcp_server.get_llm()
 
 
 class TestGetEmbeddings:
     """Test embeddings initialization"""
     
-    @patch.dict('os.environ', {'EMBEDDINGS_PROVIDER': 'openai', 'OPENAI_API_KEY': 'test-key'})
-    @patch('mcp_server.OpenAIEmbeddings')
-    def test_get_embeddings_openai(self, mock_embeddings):
-        """Test OpenAI embeddings initialization"""
+    @patch.dict(
+        'os.environ',
+        {
+            'EMBEDDING_PROVIDER': 'cohere-v2',
+            'COHERE_API_KEY': 'test-key',
+            'EMBEDDING_MODEL': 'embed-english-v2.0',
+        },
+        clear=True,
+    )
+    @patch('mcp_server.CohereEmbeddingsClient')
+    def test_get_embeddings_cohere(self, mock_embeddings_cls):
+        """Test Cohere embeddings initialization"""
         mock_emb = Mock()
-        mock_embeddings.return_value = mock_emb
+        mock_embeddings_cls.return_value = mock_emb
         
         result = mcp_server.get_embeddings()
         
         assert result == mock_emb
-        mock_embeddings.assert_called_once()
+        mock_embeddings_cls.assert_called_once()
     
-    @patch.dict('os.environ', {'EMBEDDINGS_PROVIDER': 'openai'}, clear=True)
+    @patch.dict('os.environ', {'EMBEDDING_PROVIDER': 'cohere'}, clear=True)
     def test_get_embeddings_missing_api_key(self):
         """Test embeddings initialization fails without API key"""
-        with pytest.raises(ValueError, match="OPENAI_API_KEY not found"):
+        with pytest.raises(ValueError, match="COHERE_API_KEY not found"):
             mcp_server.get_embeddings()
 
 
@@ -89,7 +95,7 @@ class TestStoreChatSummary:
         mock_get_llm.return_value = mock_llm
         
         mock_embeddings = Mock()
-        mock_embeddings.embed_query.return_value = [0.1] * 1536
+        mock_embeddings.embed_query.return_value = [0.1] * EMBED_DIM
         mock_get_embeddings.return_value = mock_embeddings
         
         mock_conn = MagicMock()
@@ -190,7 +196,7 @@ class TestAnswerQuestion:
         """Test successful question answering"""
         # Setup mocks
         mock_embeddings = Mock()
-        mock_embeddings.embed_query.return_value = [0.1] * 1536
+        mock_embeddings.embed_query.return_value = [0.1] * EMBED_DIM
         mock_get_embeddings.return_value = mock_embeddings
         
         mock_llm = Mock()
@@ -249,7 +255,7 @@ class TestUpdateDigitalMe:
         mock_get_llm.return_value = mock_llm
         
         mock_embeddings = Mock()
-        mock_embeddings.embed_query.return_value = [0.1] * 1536
+        mock_embeddings.embed_query.return_value = [0.1] * EMBED_DIM
         mock_get_embeddings.return_value = mock_embeddings
         
         mock_conn = MagicMock()
