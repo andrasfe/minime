@@ -127,6 +127,61 @@ class TestStoreChatSummaryIntegration:
             assert db_result is not None
             assert "Processed:" in db_result['summary_text']
             assert db_result['metadata'] is not None
+            
+            # Verify metadata contains hash and original summary
+            metadata = db_result['metadata']
+            assert 'summary_hash' in metadata
+            assert 'original_summary' in metadata
+            assert metadata['original_summary'] == sample_chat_summary
+    
+    @patch('mcp_server.get_llm')
+    @patch('mcp_server.get_embeddings')
+    def test_store_chat_summary_duplicate_detection(
+        self, mock_get_embeddings, mock_get_llm,
+        clean_test_db, test_db_url, sample_chat_summary
+    ):
+        """Test that duplicate summaries are detected and skipped"""
+        # Setup mocks
+        mock_llm = Mock()
+        mock_llm_response = Mock()
+        mock_llm_response.content = "Processed: " + sample_chat_summary
+        mock_llm.invoke.return_value = mock_llm_response
+        mock_get_llm.return_value = mock_llm
+        
+        mock_embeddings = Mock()
+        test_embedding = [0.1] * EMBED_DIM
+        mock_embeddings.embed_query.return_value = test_embedding
+        mock_get_embeddings.return_value = mock_embeddings
+        
+        with patch.dict('os.environ', {'DATABASE_URL': test_db_url, 'EMBEDDING_DIMENSION': str(EMBED_DIM)}):
+            mcp_server.init_database()
+            
+            # Store summary first time
+            result1 = mcp_server.store_chat_summary.fn(sample_chat_summary)
+            assert result1["status"] == "success"
+            first_chat_id = result1["chat_id"]
+            
+            # Try to store the same summary again (should be skipped)
+            result2 = mcp_server.store_chat_summary.fn(sample_chat_summary)
+            assert result2["status"] == "skipped"
+            assert result2["chat_id"] == first_chat_id
+            assert result2["reason"] == "duplicate"
+            
+            # Verify only one record exists in database
+            conn = clean_test_db
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute("SELECT COUNT(*) as count FROM chat_summaries;")
+                count = cur.fetchone()['count']
+                assert count == 1, "Should only have one summary, not duplicates"
+                
+                # Verify the stored record has hash in metadata
+                cur.execute("SELECT metadata FROM chat_summaries WHERE id = %s;", (first_chat_id,))
+                record = cur.fetchone()
+                assert record is not None
+                metadata = record['metadata']
+                assert 'summary_hash' in metadata
+                assert 'original_summary' in metadata
+                assert metadata['original_summary'] == sample_chat_summary
     
     @patch('mcp_server.get_llm')
     @patch('mcp_server.get_embeddings')

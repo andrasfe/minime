@@ -18,7 +18,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
 COPY mcp_server.py .
+COPY ai_providers.py .
 COPY .env.example .env.example
+# Copy .env file (must exist in project root)
+COPY .env .env
 
 # Create directory for persistent data (if needed)
 RUN mkdir -p /app/data

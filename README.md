@@ -374,15 +374,102 @@ docker volume ls
 docker volume inspect digital-me-postgres-data
 ```
 
+### Database Backup and Restore
+
+The project includes scripts and workflows for backing up and restoring the PostgreSQL database.
+
+#### Recommended Method: SQL Dump (pg_dump)
+
+The recommended approach uses PostgreSQL's `pg_dump` tool, which creates portable SQL backups.
+
+**Using the backup script:**
+```bash
+# Create a backup (automatically compressed)
+./scripts/backup_db.sh
+
+# Or specify a custom backup file
+./scripts/backup_db.sh backups/my_backup.sql
+```
+
+**Manual backup:**
+```bash
+# Create backup directory
+mkdir -p backups
+
+# Create SQL backup
+docker-compose exec postgres pg_dump \
+  -U digitalme \
+  -d digitalme \
+  --clean \
+  --if-exists \
+  > backups/backup_$(date +%Y%m%d_%H%M%S).sql
+
+# Compress the backup
+gzip backups/backup_*.sql
+```
+
+**Restore from backup:**
+```bash
+# Using the restore script (with confirmation prompt)
+./scripts/restore_db.sh backups/backup_20241110_120000.sql.gz
+
+# Manual restore
+gunzip -c backups/backup_20241110_120000.sql.gz | \
+  docker-compose exec -T postgres psql -U digitalme -d digitalme
+```
+
+**WARNING:** Restoring will replace all existing data in the database. Always create a backup before restoring.
+
+#### Alternative Method: Volume Backup
+
+For complete volume-level backups (includes all PostgreSQL files):
+
 **Backup volume:**
 ```bash
-docker run --rm -v digital-me-postgres-data:/data -v $(pwd):/backup alpine tar czf /backup/backup.tar.gz /data
+# Create backup directory
+mkdir -p backups
+
+# Backup the entire volume
+docker run --rm \
+  -v digital-me-postgres-data:/data \
+  -v $(pwd)/backups:/backup \
+  alpine tar czf /backup/volume_backup_$(date +%Y%m%d_%H%M%S).tar.gz -C /data .
 ```
 
 **Restore volume:**
 ```bash
-docker run --rm -v digital-me-postgres-data:/data -v $(pwd):/backup alpine sh -c "cd /data && tar xzf /backup/backup.tar.gz"
+# WARNING: This requires stopping the database first
+docker-compose down
+
+# Restore the volume
+docker run --rm \
+  -v digital-me-postgres-data:/data \
+  -v $(pwd)/backups:/backup \
+  alpine sh -c "cd /data && rm -rf * && tar xzf /backup/volume_backup_20241110_120000.tar.gz"
+
+# Start services again
+docker-compose up -d
 ```
+
+#### Backup Best Practices
+
+1. **Regular Backups**: Schedule automated backups (e.g., daily) using cron or a scheduler
+2. **Off-site Storage**: Store backups in a separate location (cloud storage, different server)
+3. **Test Restores**: Periodically test restore procedures to ensure backups are valid
+4. **Retention Policy**: Keep multiple backup versions (daily, weekly, monthly)
+5. **Before Major Changes**: Always create a backup before schema migrations or data updates
+
+**Example cron job for daily backups:**
+```bash
+# Add to crontab (crontab -e)
+0 2 * * * cd /path/to/minime && ./scripts/backup_db.sh backups/daily/backup_$(date +\%Y\%m\%d).sql
+```
+
+#### Backup File Locations
+
+- **SQL backups**: Stored in `./backups/` directory (created automatically)
+- **Volume backups**: Can be stored anywhere, but `./backups/` is recommended
+- **Backup files**: Include timestamps in filenames for easy identification
 
 ### Docker Integration Tests
 

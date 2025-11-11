@@ -39,7 +39,7 @@ htmlcov
 history/
 
 # Environment
-.env
+# Note: .env is NOT ignored so it can be copied into Docker image
 .env.local
 .env.*.local
 

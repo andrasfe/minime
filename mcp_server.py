@@ -11,6 +11,7 @@ All reasoning is delegated to external AI (ZFC-compliant).
 
 import os
 import json
+import hashlib
 from typing import Optional
 from datetime import datetime
 
@@ -104,7 +105,7 @@ def get_embeddings():
     return embeddings
 
 
-def get_db_connection():
+def get_db_connection(register_vector_type: bool = True):
     """Get a database connection from the pool"""
     global db_pool
     if db_pool is None:
@@ -113,8 +114,13 @@ def get_db_connection():
             raise ValueError("DATABASE_URL not found in .env")
         db_pool = ThreadedConnectionPool(1, 5, db_url)
     conn = db_pool.getconn()
-    # Register pgvector adapter
-    register_vector(conn)
+    # Register pgvector adapter (only if extension exists)
+    if register_vector_type:
+        try:
+            register_vector(conn)
+        except psycopg2.ProgrammingError:
+            # Extension not created yet, will be created in init_database
+            pass
     return conn
 
 
@@ -127,11 +133,16 @@ def return_db_connection(conn):
 
 def init_database():
     """Initialize database schema if it doesn't exist"""
-    conn = get_db_connection()
+    # Get connection without registering vector (extension doesn't exist yet)
+    conn = get_db_connection(register_vector_type=False)
     try:
         with conn.cursor() as cur:
             # Enable pgvector extension
             cur.execute("CREATE EXTENSION IF NOT EXISTS vector;")
+            conn.commit()
+            
+            # Now register vector type after extension is created
+            register_vector(conn)
             
             embedding_dimension = get_embedding_dimension()
             
@@ -269,16 +280,39 @@ Output only the processed summary text, nothing else."""),
         embedding_vector = embeddings_client.embed_query(processed_summary)
         
         # Step 3: Store in database
+        # Compute hash of original summary for duplicate detection
+        summary_hash = hashlib.sha256(summary.encode('utf-8')).hexdigest()
+        
         conn = get_db_connection()
         try:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                # Check if summary with this hash already exists
+                cur.execute("""
+                    SELECT id FROM chat_summaries 
+                    WHERE metadata->>'summary_hash' = %s
+                    LIMIT 1;
+                """, (summary_hash,))
+                existing = cur.fetchone()
+                
+                if existing:
+                    return {
+                        "status": "skipped",
+                        "message": "Chat summary already exists in database",
+                        "chat_id": existing['id'],
+                        "reason": "duplicate"
+                    }
+                
                 # Convert embedding to numpy array for pgvector
                 embedding_array = np.array(embedding_vector, dtype=np.float32)
+                metadata = {
+                    "original_summary": summary,
+                    "summary_hash": summary_hash
+                }
                 cur.execute("""
                     INSERT INTO chat_summaries (summary_text, embedding, metadata)
                     VALUES (%s, %s, %s)
                     RETURNING id, created_at;
-                """, (processed_summary, embedding_array, json.dumps({"original_summary": summary})))
+                """, (processed_summary, embedding_array, json.dumps(metadata)))
                 
                 result = cur.fetchone()
                 chat_id = result['id']
