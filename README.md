@@ -58,7 +58,7 @@ pip install -r requirements.txt
 psql -d your_database -c "CREATE EXTENSION IF NOT EXISTS vector;"
 ```
 
-### 3. Configure Environment Variables
+### 4. Configure Environment Variables
 
 Create a `.env` file in the project root:
 
@@ -82,7 +82,29 @@ ANTHROPIC_MODEL=claude-3-5-sonnet-20241022
 EMBEDDINGS_PROVIDER=openai
 ```
 
-### 5. Run the Server
+### 5. Start PostgreSQL Database
+
+**IMPORTANT:** PostgreSQL must be running before starting the MCP server.
+
+**Option A: Using Docker (Recommended)**
+```bash
+# Start PostgreSQL container
+docker-compose up -d postgres
+
+# Verify it's running
+docker-compose ps
+
+# Check if PostgreSQL is ready
+docker-compose exec postgres pg_isready -U digitalme
+```
+
+**Option B: Local PostgreSQL Installation**
+If you have PostgreSQL installed locally, make sure:
+- PostgreSQL service is running
+- The database specified in `DATABASE_URL` exists
+- pgvector extension can be installed (see step 3 above)
+
+### 6. Run the Server
 
 **Make sure your virtual environment is activated:**
 ```bash
@@ -90,6 +112,8 @@ source venv/bin/activate  # Linux/Mac
 # or
 venv\Scripts\activate      # Windows
 ```
+
+**IMPORTANT:** Ensure PostgreSQL is running before starting the server (see step 4 above).
 
 The server can be run in two modes:
 
@@ -103,6 +127,10 @@ FastMCP automatically supports streamable HTTP when configured in your MCP clien
 - Initialize the database schema
 - Create necessary tables and indexes
 - Set up the pgvector extension
+
+**Note:** If you see a connection error, make sure PostgreSQL is running:
+- With Docker: `docker-compose up -d postgres`
+- Locally: Check your PostgreSQL service status
 
 ## MCP Tools
 
@@ -510,13 +538,38 @@ Environment variables can be set in:
 ### Troubleshooting
 
 **Database connection issues:**
-```bash
-# Check if PostgreSQL is ready
-docker-compose exec postgres pg_isready -U digitalme
 
-# Check logs
-docker-compose logs postgres
-```
+If you see `Connection refused` or `DATABASE_URL not found` errors:
+
+1. **Check if PostgreSQL is running:**
+   ```bash
+   # With Docker
+   docker-compose ps
+   docker-compose exec postgres pg_isready -U digitalme
+   
+   # If not running, start it:
+   docker-compose up -d postgres
+   ```
+
+2. **Verify DATABASE_URL in .env:**
+   ```bash
+   # Check your .env file has the correct connection string
+   grep DATABASE_URL .env
+   
+   # For Docker: postgresql://digitalme:digitalme@localhost:5432/digitalme
+   # For local: postgresql://user:password@localhost:5432/database_name
+   ```
+
+3. **Check PostgreSQL logs:**
+   ```bash
+   docker-compose logs postgres
+   ```
+
+4. **Test connection manually:**
+   ```bash
+   # With Docker
+   docker-compose exec postgres psql -U digitalme -d digitalme -c "SELECT version();"
+   ```
 
 **Volume issues:**
 ```bash

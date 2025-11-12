@@ -9,3 +9,5 @@ backups/
 *.log
 history/*/conversations_processed/
 history/openAI/*
+all_conversations.txt
+all_summaries.txt

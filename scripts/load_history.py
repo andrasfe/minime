@@ -88,35 +88,52 @@ def _extract_conversation_text(conversation_data: dict) -> str:
     conversation_parts = []
     
     # Sort by creation time if available
-    sorted_messages = sorted(
-        messages.items(),
-        key=lambda x: x[1].get("message", {}).get("create_time", 0) or 0
-    )
+    def get_create_time(item):
+        message_data = item[1]
+        message = message_data.get("message") if message_data else None
+        if message and isinstance(message, dict):
+            return message.get("create_time", 0) or 0
+        return 0
+    
+    sorted_messages = sorted(messages.items(), key=get_create_time)
     
     for message_id, message_data in sorted_messages:
         message = message_data.get("message", {})
         if not message:
             continue
             
-        role = message.get("author", {}).get("role", "")
+        author = message.get("author", {})
+        if isinstance(author, dict):
+            role = author.get("role", "")
+        else:
+            role = ""
+        
         content = message.get("content", {})
         
-        if role == "user":
-            # Extract user message text
+        # Extract text from various content formats
+        text_parts = []
+        if isinstance(content, dict):
             if "parts" in content:
                 for part in content["parts"]:
                     if isinstance(part, str):
-                        conversation_parts.append(f"User: {part}")
+                        text_parts.append(part)
+                    elif isinstance(part, dict) and "text" in part:
+                        text_parts.append(part["text"])
             elif "text" in content:
-                conversation_parts.append(f"User: {content['text']}")
-        elif role == "assistant":
-            # Extract assistant message text
-            if "parts" in content:
-                for part in content["parts"]:
-                    if isinstance(part, str):
-                        conversation_parts.append(f"Assistant: {part}")
-            elif "text" in content:
-                conversation_parts.append(f"Assistant: {content['text']}")
+                text_parts.append(str(content["text"]))
+        elif isinstance(content, str):
+            text_parts.append(content)
+        elif isinstance(content, list):
+            for part in content:
+                if isinstance(part, str):
+                    text_parts.append(part)
+                elif isinstance(part, dict) and "text" in part:
+                    text_parts.append(part["text"])
+        
+        # Add to conversation if we found text
+        if text_parts:
+            role_label = "User" if role == "user" else "Assistant" if role == "assistant" else role.title() if role else "Unknown"
+            conversation_parts.append(f"{role_label}: {' '.join(text_parts)}")
     
     return "\n\n".join(conversation_parts)
 
@@ -140,13 +157,20 @@ def _process_file(file_path: Path) -> list[str]:
             elif "text" in data:
                 return [data["text"]]
         elif isinstance(data, list):
-            # List of summaries
+            # List of items - could be conversations or summaries
             summaries = []
             for item in data:
                 if isinstance(item, str):
                     summaries.append(item)
                 elif isinstance(item, dict):
-                    summaries.append(item.get("summary", item.get("text", str(item))))
+                    # Check if this is a conversation object with mapping
+                    if "mapping" in item or ("title" in item and "mapping" in item):
+                        conversation_text = _extract_conversation_text(item)
+                        if conversation_text:
+                            summaries.append(conversation_text)
+                    # Otherwise treat as simple summary format
+                    else:
+                        summaries.append(item.get("summary", item.get("text", str(item))))
             return summaries
         elif isinstance(data, str):
             # Plain text file
