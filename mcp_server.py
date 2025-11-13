@@ -487,16 +487,13 @@ def answer_question(question: str) -> dict:
         question_embedding = embeddings_client.embed_query(question)
         
         # Extract potential keywords from question for hybrid search
-        # Simple keyword extraction: look for capitalized words and quoted phrases
+        # Focus on specific topic keywords, not names or user-related terms
         keywords = []
         # Extract quoted phrases
         quoted = re.findall(r'"([^"]+)"', question)
         keywords.extend(quoted)
-        # Extract capitalized words (likely proper nouns)
-        capitalized = re.findall(r'\b[A-Z][a-z]+\b', question)
-        keywords.extend(capitalized)
-        # Also include lowercase words that might be important (remove common stop words)
-        stop_words = {'is', 'are', 'was', 'were', 'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'about', 'what', 'where', 'when', 'who', 'why', 'how', 'does', 'do', 'did', 'has', 'have', 'had', 'will', 'would', 'could', 'should', 'may', 'might', 'can', 'this', 'that', 'these', 'those', 'i', 'you', 'he', 'she', 'it', 'we', 'they'}
+        # Extract lowercase words that might be important (remove common stop words AND user-related terms)
+        stop_words = {'is', 'are', 'was', 'were', 'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'about', 'what', 'where', 'when', 'who', 'why', 'how', 'does', 'do', 'did', 'has', 'have', 'had', 'will', 'would', 'could', 'should', 'may', 'might', 'can', 'this', 'that', 'these', 'those', 'i', 'you', 'he', 'she', 'it', 'we', 'they', 'user', 'users', 'person', 'people', 'inquire', 'inquired', 'ask', 'asked', 'tell', 'told', 'sort', 'kind', 'type'}
         words = re.findall(r'\b[a-z]+\b', question.lower())
         keywords.extend([w for w in words if w not in stop_words and len(w) > 3])
         keywords = list(set(keywords))  # Remove duplicates
@@ -519,7 +516,7 @@ def answer_question(question: str) -> dict:
                     FROM chat_summaries
                     WHERE embedding <=> %s::vector < 0.7
                     ORDER BY embedding <=> %s::vector
-                    LIMIT 50;
+                    LIMIT 80;
                 """, (question_embedding_array, question_embedding_array, question_embedding_array))
                 semantic_summaries = cur.fetchall()
                 
@@ -537,7 +534,7 @@ def answer_question(question: str) -> dict:
                                1.0 as similarity
                         FROM chat_summaries
                         WHERE {' OR '.join(keyword_conditions)}
-                        LIMIT 50;
+                        LIMIT 80;
                     """
                     cur.execute(keyword_query, tuple(keyword_params))
                     keyword_summaries = cur.fetchall()
@@ -560,8 +557,8 @@ def answer_question(question: str) -> dict:
                         relevant_summaries.append(summary)
                         seen_text_hashes.add(text_hash)
                 
-                # Limit to top 50 total
-                relevant_summaries = relevant_summaries[:50]
+                # Limit to top 80 total
+                relevant_summaries = relevant_summaries[:80]
                 
                 # Get digital_me summary
                 cur.execute("SELECT summary_text FROM digital_me WHERE id = 1;")
@@ -596,17 +593,27 @@ def answer_question(question: str) -> dict:
         
         # Use LLM to answer the question
         answer_prompt = ChatPromptTemplate.from_messages([
-            ("system", """You are an assistant that answers questions about Andras based on his chat history and digital twin profile.
+            ("system", """You are an assistant that answers questions about Andras (also known as András Ferenczi) based on his chat history and digital twin profile.
 
-CRITICAL: ALL conversations and summaries in the provided context are about Andras. Every chat summary, conversation, user profile, or context provided represents Andras's own conversations, interests, questions, or activities. If you see a "user profile" or "conversation" in the context, it is Andras's profile or Andras's conversation.
+CRITICAL IDENTITY MAPPING:
+- ANY reference to "User", "user", "the user", or "user profile" in the context refers to ANDRAS
+- ANY conversation, question, or inquiry in the context was made BY ANDRAS
+- ANY interest, preference, or activity mentioned in the context belongs to ANDRAS
+- This is Andras's personal digital twin database - EVERY piece of information is about HIM
 
-IMPORTANT: Carefully review ALL the provided context from Andras's stored conversations and digital twin summary. Extract and synthesize information from ALL relevant sources to answer the question comprehensively.
+IMPORTANT: ALL conversations and summaries in the provided context are Andras's own conversations. When you see:
+- "User asked about X" → Andras asked about X
+- "User is interested in Y" → Andras is interested in Y  
+- "User profile" → Andras's profile
+- "User context" → Andras's context
 
-If the question asks about specific topics, places, interests, or activities (like "Naples", "quantum", "interests", "projects", etc.), search through ALL the provided context for mentions of those topics, even if they appear in multiple summaries. If a conversation mentions places to visit, activities, interests, or preferences, those are Andras's interests and preferences.
+Carefully review ALL the provided context from Andras's stored conversations and digital twin summary. Extract and synthesize information from ALL relevant sources to answer the question comprehensively.
 
-Use the provided context to answer the question accurately and comprehensively. Include specific details, examples, and nuances from the context. If the context contains relevant information about Andras (even if phrased as "user" or "profile"), make sure to include it in your answer.
+If the question asks about specific topics, places, interests, or activities (like "sciatica", "Naples", "quantum", "interests", "projects", etc.), search through ALL the provided context for mentions of those topics, even if they appear in multiple summaries. If a conversation mentions places to visit, activities, health concerns, interests, or preferences, those are Andras's interests and preferences.
 
-Be factual and thorough. Focus on what the context tells you about Andras specifically. Do NOT dismiss conversations as "belonging to a different user" - all conversations in this database are about Andras."""),
+Use the provided context to answer the question accurately and comprehensively. Include specific details, examples, and nuances from the context. 
+
+Be factual and thorough. Focus on what the context tells you about Andras specifically. Do NOT dismiss conversations as "belonging to a different user" or say "there is no record" when the context clearly contains relevant information about "User" - that User IS Andras."""),
             ("human", """Context:
 {context}
 
