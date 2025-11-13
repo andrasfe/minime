@@ -9,5 +9,6 @@ backups/
 *.log
 history/*/conversations_processed/
 history/openAI/*
+history/anthropic/*
 all_conversations.txt
 all_summaries.txt

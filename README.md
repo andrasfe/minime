@@ -548,6 +548,95 @@ Environment variables can be set in:
 2. `docker-compose.yml` (for defaults)
 3. Command line: `docker-compose run -e VAR=value mcp-server`
 
+## Loading Conversation History
+
+The `load_history.py` script allows you to import conversation history from OpenAI (ChatGPT) or Anthropic (Claude) into your Digital Me database.
+
+### Supported Providers
+
+- **OpenAI**: ChatGPT conversation exports
+- **Anthropic**: Claude conversation exports
+
+### Directory Structure
+
+Place your conversation exports in the appropriate directory:
+
+```
+history/
+├── openAI/          # OpenAI ChatGPT exports
+│   └── [export directories with conversations.json files]
+└── anthropic/       # Anthropic Claude exports
+    └── [export directories with conversations.json files]
+```
+
+### Usage
+
+**Load OpenAI conversations:**
+```bash
+python scripts/load_history.py --provider openai
+```
+
+**Load Anthropic conversations:**
+```bash
+python scripts/load_history.py --provider anthropic
+```
+
+**Load from custom directory:**
+```bash
+python scripts/load_history.py --provider openai --directory /path/to/conversations
+```
+
+**Dry run (preview without loading):**
+```bash
+python scripts/load_history.py --provider anthropic --dry-run
+```
+
+**Specify custom MCP server URL:**
+```bash
+python scripts/load_history.py --provider openai --url http://localhost:9000/mcp
+```
+
+### Conversation Format Validation
+
+The script automatically validates conversation structure:
+
+**OpenAI format** requires:
+- `mapping` field (conversation messages)
+- OR `title` field (conversation metadata)
+
+**Anthropic format** requires:
+- `uuid` field (conversation ID)
+- `chat_messages` array
+- `created_at` timestamp
+
+Invalid conversations are skipped with a validation error message.
+
+### Features
+
+- **Duplicate detection**: Automatically skips conversations already in the database (using SHA256 hash)
+- **Format validation**: Validates conversation structure before processing
+- **Progress tracking**: Shows real-time progress with file counts and status
+- **Error handling**: Graceful handling of malformed files and connection issues
+- **Batch processing**: Processes all JSON/TXT files in directory tree recursively
+
+### Example Output
+
+```
+Found 150 files to process (provider: anthropic)
+Checking connection to MCP server at http://127.0.0.1:8000/mcp...
+✅ Server connection OK
+
+Processing: anthropic/data-2025-11-13/conversations.json
+  Summary 1/50
+  ✅ Loaded successfully (ID: 1234)
+  Summary 2/50
+  ⏭️  Skipped - already exists in database (ID: 1235)
+  ...
+
+==================================================
+Summary: 45 loaded, 5 skipped, 0 failed, 0 validation errors
+```
+
 ### Troubleshooting
 
 **Database connection issues:**

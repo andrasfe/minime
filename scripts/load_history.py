@@ -2,11 +2,16 @@
 """
 Load conversation history files into the Digital Me database.
 
-This script processes conversation history files from history/openAI/ and
-loads them into the database using the MCP server's store_chat_summary tool.
+This script processes conversation history files from OpenAI or Anthropic (Claude)
+and loads them into the database using the MCP server's store_chat_summary tool.
+
+Supported providers:
+- openai: OpenAI ChatGPT conversation exports
+- anthropic: Anthropic Claude conversation exports
 
 Usage:
-    python scripts/load_history.py [--directory history/openAI] [--url http://127.0.0.1:8000/mcp]
+    python scripts/load_history.py --provider openai [--directory history/openAI]
+    python scripts/load_history.py --provider anthropic [--directory history/anthropic]
 """
 
 import argparse
@@ -14,13 +19,16 @@ import asyncio
 import json
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from fastmcp import Client
 from fastmcp.client.client import CallToolResult
 
 DEFAULT_SERVER_URL = "http://127.0.0.1:8000/mcp"
-DEFAULT_HISTORY_DIR = "history/openAI"
+DEFAULT_OPENAI_DIR = "history/openAI"
+DEFAULT_ANTHROPIC_DIR = "history/anthropic"
+
+ProviderType = Literal["openai", "anthropic"]
 
 
 def _extract_result(result: CallToolResult) -> Any:
@@ -82,7 +90,24 @@ async def _store_summary(url: str, summary: str) -> dict:
         raise
 
 
-def _extract_conversation_text(conversation_data: dict) -> str:
+def _validate_openai_conversation(data: dict) -> bool:
+    """Validate OpenAI conversation structure."""
+    if not isinstance(data, dict):
+        return False
+    # OpenAI format has "mapping" or "title" fields
+    return "mapping" in data or "title" in data
+
+
+def _validate_anthropic_conversation(data: dict) -> bool:
+    """Validate Anthropic conversation structure."""
+    if not isinstance(data, dict):
+        return False
+    # Anthropic format has uuid, chat_messages, and created_at
+    required_fields = ["uuid", "chat_messages", "created_at"]
+    return all(field in data for field in required_fields)
+
+
+def _extract_openai_conversation(conversation_data: dict) -> str:
     """Extract conversation text from OpenAI conversation format."""
     messages = conversation_data.get("mapping", {})
     conversation_parts = []
@@ -138,20 +163,55 @@ def _extract_conversation_text(conversation_data: dict) -> str:
     return "\n\n".join(conversation_parts)
 
 
-def _process_file(file_path: Path) -> list[str]:
+def _extract_anthropic_conversation(conversation_data: dict) -> str:
+    """Extract conversation text from Anthropic conversation format."""
+    conversation_parts = []
+    
+    # Add conversation name/title if available
+    name = conversation_data.get("name", "")
+    if name:
+        conversation_parts.append(f"Title: {name}")
+    
+    # Extract chat messages
+    chat_messages = conversation_data.get("chat_messages", [])
+    for message in chat_messages:
+        sender = message.get("sender", "")
+        text = message.get("text", "")
+        
+        if not text:
+            # Try to extract from content array
+            content = message.get("content", [])
+            text_parts = []
+            for content_item in content:
+                if isinstance(content_item, dict) and content_item.get("type") == "text":
+                    text_parts.append(content_item.get("text", ""))
+            text = " ".join(text_parts)
+        
+        if text:
+            role_label = "User" if sender == "human" else "Assistant" if sender == "assistant" else sender.title() if sender else "Unknown"
+            conversation_parts.append(f"{role_label}: {text}")
+    
+    return "\n\n".join(conversation_parts)
+
+
+def _process_file(file_path: Path, provider: ProviderType) -> list[str]:
     """Process a conversation history file and extract summaries."""
     try:
         with open(file_path, "r", encoding="utf-8") as f:
             data = json.load(f)
         
-        # Handle different file formats
+        # Handle different file formats based on provider
         if isinstance(data, dict):
-            # OpenAI conversation format
-            if "mapping" in data or "title" in data:
-                conversation_text = _extract_conversation_text(data)
+            # Try provider-specific format first
+            if provider == "openai" and _validate_openai_conversation(data):
+                conversation_text = _extract_openai_conversation(data)
                 if conversation_text:
                     return [conversation_text]
-            # Simple summary format
+            elif provider == "anthropic" and _validate_anthropic_conversation(data):
+                conversation_text = _extract_anthropic_conversation(data)
+                if conversation_text:
+                    return [conversation_text]
+            # Simple summary format (provider-agnostic)
             elif "summary" in data:
                 return [data["summary"]]
             elif "text" in data:
@@ -163,9 +223,13 @@ def _process_file(file_path: Path) -> list[str]:
                 if isinstance(item, str):
                     summaries.append(item)
                 elif isinstance(item, dict):
-                    # Check if this is a conversation object with mapping
-                    if "mapping" in item or ("title" in item and "mapping" in item):
-                        conversation_text = _extract_conversation_text(item)
+                    # Check provider-specific formats
+                    if provider == "openai" and _validate_openai_conversation(item):
+                        conversation_text = _extract_openai_conversation(item)
+                        if conversation_text:
+                            summaries.append(conversation_text)
+                    elif provider == "anthropic" and _validate_anthropic_conversation(item):
+                        conversation_text = _extract_anthropic_conversation(item)
                         if conversation_text:
                             summaries.append(conversation_text)
                     # Otherwise treat as simple summary format
@@ -188,7 +252,7 @@ def _process_file(file_path: Path) -> list[str]:
         return []
 
 
-async def _load_directory(directory: Path, url: str, dry_run: bool = False):
+async def _load_directory(directory: Path, url: str, provider: ProviderType, dry_run: bool = False):
     """Load all conversation files from a directory."""
     if not directory.exists():
         print(f"Error: Directory {directory} does not exist", file=sys.stderr)
@@ -204,7 +268,7 @@ async def _load_directory(directory: Path, url: str, dry_run: bool = False):
         print(f"No JSON or text files found in {directory}", file=sys.stderr)
         return
     
-    print(f"Found {len(files)} files to process")
+    print(f"Found {len(files)} files to process (provider: {provider})")
     if dry_run:
         print("DRY RUN MODE - No data will be loaded")
     else:
@@ -223,6 +287,7 @@ async def _load_directory(directory: Path, url: str, dry_run: bool = False):
     failed = 0
     skipped = 0
     connection_errors = 0
+    validation_errors = 0
     
     for file_path in files:
         # Use directory as base for relative path, fallback to absolute if needed
@@ -237,10 +302,11 @@ async def _load_directory(directory: Path, url: str, dry_run: bool = False):
                 display_path = str(file_path)
         print(f"\nProcessing: {display_path}")
         
-        summaries = _process_file(file_path)
+        summaries = _process_file(file_path, provider)
         
         if not summaries:
-            print(f"  ⚠️  No content extracted from {file_path.name}")
+            print(f"  ⚠️  No content extracted or validation failed for {file_path.name}")
+            validation_errors += 1
             continue
         
         for i, summary in enumerate(summaries):
@@ -282,10 +348,12 @@ async def _load_directory(directory: Path, url: str, dry_run: bool = False):
     
     print(f"\n{'='*50}")
     if connection_errors > 0:
-        print(f"Summary: {loaded} loaded, {skipped} skipped, {failed} failed ({connection_errors} connection errors)")
+        print(f"Summary: {loaded} loaded, {skipped} skipped, {failed} failed, {validation_errors} validation errors ({connection_errors} connection errors)")
         print("\n⚠️  Server connection was lost. Please restart the server and run again.")
     else:
-        if skipped > 0:
+        if validation_errors > 0:
+            print(f"Summary: {loaded} loaded, {skipped} skipped, {failed} failed, {validation_errors} validation errors")
+        elif skipped > 0:
             print(f"Summary: {loaded} loaded, {skipped} skipped, {failed} failed")
         else:
             print(f"Summary: {loaded} loaded, {failed} failed")
@@ -295,13 +363,35 @@ async def _load_directory(directory: Path, url: str, dry_run: bool = False):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Load conversation history files into the Digital Me database"
+        description="Load conversation history files into the Digital Me database",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Load OpenAI conversations
+  python scripts/load_history.py --provider openai
+
+  # Load Anthropic conversations
+  python scripts/load_history.py --provider anthropic
+
+  # Load from custom directory
+  python scripts/load_history.py --provider openai --directory /path/to/conversations
+
+  # Dry run to see what would be loaded
+  python scripts/load_history.py --provider anthropic --dry-run
+        """
+    )
+    parser.add_argument(
+        "--provider",
+        type=str,
+        required=True,
+        choices=["openai", "anthropic"],
+        help="Conversation provider (openai or anthropic)"
     )
     parser.add_argument(
         "--directory",
         type=Path,
-        default=Path(DEFAULT_HISTORY_DIR),
-        help=f"Directory containing history files (default: {DEFAULT_HISTORY_DIR})"
+        default=None,
+        help=f"Directory containing history files (default: {DEFAULT_OPENAI_DIR} for openai, {DEFAULT_ANTHROPIC_DIR} for anthropic)"
     )
     parser.add_argument(
         "--url",
@@ -316,7 +406,14 @@ def main():
     
     args = parser.parse_args()
     
-    asyncio.run(_load_directory(args.directory, args.url, args.dry_run))
+    # Set default directory based on provider if not specified
+    if args.directory is None:
+        if args.provider == "openai":
+            args.directory = Path(DEFAULT_OPENAI_DIR)
+        elif args.provider == "anthropic":
+            args.directory = Path(DEFAULT_ANTHROPIC_DIR)
+    
+    asyncio.run(_load_directory(args.directory, args.url, args.provider, args.dry_run))
 
 
 if __name__ == "__main__":
