@@ -1,16 +1,17 @@
 """
-MCP Server for Digital Me - Intelligent Chat Summary Storage with RAG
+MCP Server for Digital Me - Digital Twin of Andras
 
-This server provides tools for:
-1. Storing chat summaries in PostgreSQL/pgvector for RAG
-2. Maintaining a "digital me" summary record
-3. Answering ad-hoc questions about the user
+This server provides tools for managing a digital twin of Andras, an individual:
+1. Storing chat summaries and conversations about Andras in PostgreSQL/pgvector for RAG
+2. Maintaining a comprehensive "digital me" summary record representing Andras's knowledge, interests, preferences, and context
+3. Answering questions about Andras using semantic search over stored conversations
 
 All reasoning is delegated to external AI (ZFC-compliant).
 """
 
 import os
 import json
+import re
 import hashlib
 from typing import Optional
 from datetime import datetime
@@ -32,7 +33,7 @@ from ai_providers import CohereEmbeddingsClient, OpenRouterChat
 load_dotenv()
 
 # Initialize MCP server
-mcp = FastMCP("Digital Me MCP Server")
+mcp = FastMCP("Digital Me MCP Server - Digital Twin of Andras")
 
 # Database connection pool
 db_pool: Optional[ThreadedConnectionPool] = None
@@ -235,19 +236,19 @@ def init_database():
 @mcp.tool()
 def store_chat_summary(summary: str) -> dict:
     """
-    Store a chat summary in the database for RAG retrieval.
+    Store a chat summary or conversation about Andras in the database for RAG retrieval.
     
-    This tool:
-    1. Uses an LLM to process the summary into an appropriate RAG format
-    2. Generates embeddings for vector search
+    This tool stores conversations and summaries related to Andras, building his digital twin:
+    1. Uses an LLM to process the summary into an optimal RAG format
+    2. Generates embeddings for semantic vector search
     3. Stores the processed summary in PostgreSQL/pgvector
-    4. Updates the "digital me" record with new information about the user
+    4. Updates Andras's "digital me" record with new information about his knowledge, interests, preferences, and context
     
     Args:
-        summary: A summary of a chat conversation
+        summary: A summary or full text of a chat conversation about Andras
         
     Returns:
-        A dictionary with status and details about the stored summary
+        A dictionary with status and details about the stored summary, including chat_id and created_at timestamp
     """
     try:
         # Initialize database if needed
@@ -260,12 +261,12 @@ def store_chat_summary(summary: str) -> dict:
         # Step 1: Process summary with LLM for RAG optimization
         process_prompt = ChatPromptTemplate.from_messages([
             ("system", """You are a RAG (Retrieval Augmented Generation) optimization assistant.
-Your task is to process a chat summary into an optimal format for retrieval.
+Your task is to process a chat summary or conversation about Andras into an optimal format for retrieval.
 
 Transform the summary into a clear, structured text that:
-1. Preserves all important information about the user
+1. Preserves all important information about Andras
 2. Uses clear, searchable language
-3. Extracts key facts, interests, preferences, and context
+3. Extracts key facts, interests, preferences, expertise areas, projects, goals, and context about Andras
 4. Is optimized for semantic search and retrieval
 
 Output only the processed summary text, nothing else."""),
@@ -355,16 +356,16 @@ def update_digital_me(new_summary: str):
             
             # Use LLM to merge new information into existing summary
             merge_prompt = ChatPromptTemplate.from_messages([
-                ("system", """You are maintaining a comprehensive summary about a person (the "digital me").
-Your task is to update this summary by incorporating new information from a chat summary.
+                ("system", """You are maintaining a comprehensive digital twin summary about Andras.
+Your task is to update this summary by incorporating new information from a chat summary or conversation about Andras.
 
 Guidelines:
-1. Preserve all existing important information
-2. Add new facts, interests, preferences, and context
-3. Update or refine existing information if the new data provides more detail
-4. Remove outdated information if contradicted by new data
+1. Preserve all existing important information about Andras
+2. Add new facts, interests, preferences, and context about Andras
+3. Update or refine existing information if the new data provides more detail about Andras
+4. Remove outdated information if contradicted by new data about Andras
 5. Keep the summary comprehensive but well-organized
-6. Focus on facts, interests, preferences, skills, goals, and personality traits
+6. Focus on Andras's facts, interests, preferences, skills, goals, projects, expertise areas, and personality traits
 
 Output only the updated summary text, nothing else."""),
                 ("human", """Current digital me summary:
@@ -409,13 +410,18 @@ Update the digital me summary by incorporating the new information:""")
 @mcp.tool()
 def get_digital_me() -> dict:
     """
-    Retrieve the "digital me" summary record.
+    Retrieve Andras's digital twin summary record.
     
-    This returns the comprehensive summary about the user that has been
-    continuously updated as new chat summaries are added.
+    This returns the comprehensive digital twin summary of Andras, which includes:
+    - His knowledge, interests, and expertise areas
+    - His preferences and opinions
+    - His goals, projects, and context
+    - His personality traits and communication style
+    
+    This summary is continuously updated as new chat summaries and conversations about Andras are stored.
     
     Returns:
-        A dictionary containing the digital me summary and metadata
+        A dictionary containing Andras's digital twin summary and the last updated timestamp
     """
     try:
         init_database()
@@ -457,18 +463,20 @@ def get_digital_me() -> dict:
 @mcp.tool()
 def answer_question(question: str) -> dict:
     """
-    Answer an ad-hoc question about the user using RAG retrieval.
+    Answer a question about Andras using semantic search over his digital twin data.
     
-    This tool:
-    1. Searches the chat summaries and digital_me record using semantic search
-    2. Retrieves relevant context
-    3. Uses an LLM to answer the question based on the retrieved context
+    This tool queries Andras's digital twin by:
+    1. Performing semantic vector search over stored chat summaries and conversations about Andras
+    2. Retrieving relevant context from Andras's digital me summary
+    3. Using an LLM to synthesize an accurate answer based on the retrieved information
+    
+    Use this to ask questions about Andras's interests, expertise, preferences, projects, goals, or any other aspect of his knowledge and context.
     
     Args:
-        question: A question about the user (e.g., "Is Andras interested in quantum computing?")
+        question: A question about Andras (e.g., "What domains of quantum research is Andras focused on?", "What are Andras's interests?", "What projects is Andras working on?")
         
     Returns:
-        A dictionary containing the answer and relevant context
+        A dictionary containing the answer about Andras and the number of context sources used
     """
     try:
         init_database()
@@ -478,23 +486,82 @@ def answer_question(question: str) -> dict:
         # Generate embedding for the question
         question_embedding = embeddings_client.embed_query(question)
         
+        # Extract potential keywords from question for hybrid search
+        # Simple keyword extraction: look for capitalized words and quoted phrases
+        keywords = []
+        # Extract quoted phrases
+        quoted = re.findall(r'"([^"]+)"', question)
+        keywords.extend(quoted)
+        # Extract capitalized words (likely proper nouns)
+        capitalized = re.findall(r'\b[A-Z][a-z]+\b', question)
+        keywords.extend(capitalized)
+        # Also include lowercase words that might be important (remove common stop words)
+        stop_words = {'is', 'are', 'was', 'were', 'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'about', 'what', 'where', 'when', 'who', 'why', 'how', 'does', 'do', 'did', 'has', 'have', 'had', 'will', 'would', 'could', 'should', 'may', 'might', 'can', 'this', 'that', 'these', 'those', 'i', 'you', 'he', 'she', 'it', 'we', 'they'}
+        words = re.findall(r'\b[a-z]+\b', question.lower())
+        keywords.extend([w for w in words if w not in stop_words and len(w) > 3])
+        keywords = list(set(keywords))  # Remove duplicates
+        
         # Search for relevant chat summaries
         conn = get_db_connection()
         try:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                # Search chat summaries using cosine similarity
                 # Convert embedding to numpy array for pgvector
                 question_embedding_array = np.array(question_embedding, dtype=np.float32)
+                
+                # HYBRID SEARCH: Combine semantic search with keyword search
+                semantic_summaries = []
+                keyword_summaries = []
+                
+                # 1. Semantic search with relaxed threshold
                 cur.execute("""
                     SELECT summary_text, metadata,
                            (1 - (embedding <=> %s::vector)) as similarity
                     FROM chat_summaries
-                    WHERE embedding <=> %s::vector < 0.5
+                    WHERE embedding <=> %s::vector < 0.7
                     ORDER BY embedding <=> %s::vector
-                    LIMIT 5;
+                    LIMIT 50;
                 """, (question_embedding_array, question_embedding_array, question_embedding_array))
+                semantic_summaries = cur.fetchall()
                 
-                relevant_summaries = cur.fetchall()
+                # 2. Keyword search for exact matches (prioritize these)
+                if keywords:
+                    # Build keyword search query
+                    keyword_conditions = []
+                    keyword_params = []
+                    for keyword in keywords:
+                        keyword_conditions.append("summary_text ILIKE %s")
+                        keyword_params.append(f"%{keyword}%")
+                    
+                    keyword_query = f"""
+                        SELECT summary_text, metadata,
+                               1.0 as similarity
+                        FROM chat_summaries
+                        WHERE {' OR '.join(keyword_conditions)}
+                        LIMIT 50;
+                    """
+                    cur.execute(keyword_query, tuple(keyword_params))
+                    keyword_summaries = cur.fetchall()
+                
+                # Combine and deduplicate results (prioritize keyword matches)
+                seen_text_hashes = set()
+                relevant_summaries = []
+                
+                # First add keyword matches (higher priority, similarity = 1.0)
+                for summary in keyword_summaries:
+                    text_hash = hashlib.md5(summary['summary_text'].encode()).hexdigest()
+                    if text_hash not in seen_text_hashes:
+                        relevant_summaries.append(summary)
+                        seen_text_hashes.add(text_hash)
+                
+                # Then add semantic matches that aren't already included
+                for summary in semantic_summaries:
+                    text_hash = hashlib.md5(summary['summary_text'].encode()).hexdigest()
+                    if text_hash not in seen_text_hashes:
+                        relevant_summaries.append(summary)
+                        seen_text_hashes.add(text_hash)
+                
+                # Limit to top 50 total
+                relevant_summaries = relevant_summaries[:50]
                 
                 # Get digital_me summary
                 cur.execute("SELECT summary_text FROM digital_me WHERE id = 1;")
@@ -506,22 +573,40 @@ def answer_question(question: str) -> dict:
         # Prepare context for LLM
         context_parts = []
         if digital_me_summary:
-            context_parts.append(f"Digital Me Summary:\n{digital_me_summary}")
+            context_parts.append(f"Digital Me Summary (Andras's comprehensive profile):\n{digital_me_summary}")
         
         if relevant_summaries:
-            context_parts.append("\nRelevant Chat Summaries:")
-            for summary in relevant_summaries:
-                context_parts.append(f"- {summary['summary_text']}")
+            # Count keyword vs semantic matches
+            keyword_count = sum(1 for s in relevant_summaries if s.get('similarity', 0) >= 0.99)
+            semantic_count = len(relevant_summaries) - keyword_count
+            
+            context_parts.append(f"\nRelevant Chat Summaries ({len(relevant_summaries)} found: {keyword_count} keyword matches, {semantic_count} semantic matches):")
+            for i, summary in enumerate(relevant_summaries, 1):
+                similarity = summary.get('similarity', 0)
+                text = summary['summary_text']
+                match_type = "KEYWORD" if similarity >= 0.99 else "SEMANTIC"
+                # Truncate very long summaries to avoid token limits
+                if len(text) > 2000:
+                    text = text[:2000] + "... [truncated]"
+                context_parts.append(f"\n[{i}] [{match_type}] (similarity: {similarity:.3f})\n{text}")
+        else:
+            context_parts.append("\nNo relevant chat summaries found via hybrid search (semantic + keyword).")
         
         context = "\n\n".join(context_parts) if context_parts else "No relevant context found."
         
         # Use LLM to answer the question
         answer_prompt = ChatPromptTemplate.from_messages([
-            ("system", """You are an assistant that answers questions about a person based on their chat history and digital profile.
+            ("system", """You are an assistant that answers questions about Andras based on his chat history and digital twin profile.
 
-Use the provided context to answer the question accurately. If the context doesn't contain enough information to answer definitively, say so.
+CRITICAL: ALL conversations and summaries in the provided context are about Andras. Every chat summary, conversation, user profile, or context provided represents Andras's own conversations, interests, questions, or activities. If you see a "user profile" or "conversation" in the context, it is Andras's profile or Andras's conversation.
 
-Be concise and factual."""),
+IMPORTANT: Carefully review ALL the provided context from Andras's stored conversations and digital twin summary. Extract and synthesize information from ALL relevant sources to answer the question comprehensively.
+
+If the question asks about specific topics, places, interests, or activities (like "Naples", "quantum", "interests", "projects", etc.), search through ALL the provided context for mentions of those topics, even if they appear in multiple summaries. If a conversation mentions places to visit, activities, interests, or preferences, those are Andras's interests and preferences.
+
+Use the provided context to answer the question accurately and comprehensively. Include specific details, examples, and nuances from the context. If the context contains relevant information about Andras (even if phrased as "user" or "profile"), make sure to include it in your answer.
+
+Be factual and thorough. Focus on what the context tells you about Andras specifically. Do NOT dismiss conversations as "belonging to a different user" - all conversations in this database are about Andras."""),
             ("human", """Context:
 {context}
 
@@ -534,11 +619,24 @@ Answer:""")
             answer_prompt.format_messages(context=context, question=question)
         ).content
         
+        # Calculate average similarity and keyword match count for debugging
+        avg_similarity = None
+        keyword_match_count = 0
+        if relevant_summaries:
+            similarities = [s.get('similarity', 0) for s in relevant_summaries if 'similarity' in s]
+            if similarities:
+                avg_similarity = sum(similarities) / len(similarities)
+            keyword_match_count = sum(1 for s in relevant_summaries if s.get('similarity', 0) >= 0.99)
+        
         return {
             "status": "success",
             "question": question,
             "answer": answer,
-            "context_sources": len(relevant_summaries) + (1 if digital_me_summary else 0)
+            "context_sources": len(relevant_summaries) + (1 if digital_me_summary else 0),
+            "summaries_found": len(relevant_summaries),
+            "keyword_matches": keyword_match_count,
+            "semantic_matches": len(relevant_summaries) - keyword_match_count,
+            "avg_similarity": round(avg_similarity, 3) if avg_similarity is not None else None
         }
         
     except Exception as e:

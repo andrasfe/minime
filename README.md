@@ -150,6 +150,19 @@ Stores a chat summary in the database for RAG retrieval.
 **Output:**
 - Status and details about the stored summary
 
+### LangChain CLI Client
+
+Ask questions from the terminal using LangChain with the Digital Me MCP server:
+
+```bash
+python scripts/minime_client.py --question "What domains of quantum research is minime focused on?"
+```
+
+Optional flags:
+
+- `--url` – MCP server base URL (default: `http://127.0.0.1:8000/mcp`)
+- `--format json` – output the raw JSON response
+
 ### 2. `get_digital_me`
 
 Retrieves the comprehensive "digital me" summary record.
