@@ -18,7 +18,7 @@ import sys
 from typing import Any, Dict
 
 from fastmcp import Client
-from fastmcp.client.client import CallToolResult
+from mcp import types
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.messages import HumanMessage
 from langchain_core.runnables import RunnableLambda
@@ -27,22 +27,47 @@ from langchain_core.runnables import RunnableLambda
 DEFAULT_SERVER_URL = "http://127.0.0.1:8000/mcp"
 
 
-def _extract_result(result: CallToolResult) -> Any:
-    """Normalize CallToolResult into plain Python data."""
-    if result.data is not None:
-        return result.data
-    if result.structured_content:
-        return result.structured_content
-    if result.content:
-        texts = []
-        for item in result.content:
+def _extract_result(result: list) -> Any:
+    """Normalize tool result (list of content items) into plain Python data."""
+    if not result:
+        return None
+    
+    # Extract text from TextContent items
+    texts = []
+    structured_data = None
+    
+    for item in result:
+        if isinstance(item, types.TextContent):
             text = getattr(item, "text", None)
-            if text is not None:
-                texts.append(text)
-        if len(texts) == 1:
-            return texts[0]
-        if texts:
-            return texts
+            if text:
+                # Try to parse as JSON if it looks like structured data
+                text_str = str(text).strip()
+                if text_str.startswith("{") or text_str.startswith("["):
+                    try:
+                        import json
+                        parsed = json.loads(text_str)
+                        if isinstance(parsed, dict):
+                            structured_data = parsed
+                        else:
+                            texts.append(text)
+                    except (json.JSONDecodeError, ValueError):
+                        texts.append(text)
+                else:
+                    texts.append(text)
+        elif hasattr(item, "text"):
+            # Fallback for other content types with text attribute
+            texts.append(getattr(item, "text"))
+    
+    # Prefer structured data if found
+    if structured_data:
+        return structured_data
+    
+    # Return single text if only one, otherwise return list
+    if len(texts) == 1:
+        return texts[0]
+    if texts:
+        return texts
+    
     return None
 
 

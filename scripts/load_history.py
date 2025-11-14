@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from fastmcp import Client
-from fastmcp.client.client import CallToolResult
+from mcp import types
 
 DEFAULT_SERVER_URL = "http://127.0.0.1:8000/mcp"
 DEFAULT_OPENAI_DIR = "history/openAI"
@@ -31,22 +31,47 @@ DEFAULT_ANTHROPIC_DIR = "history/anthropic"
 ProviderType = Literal["openai", "anthropic"]
 
 
-def _extract_result(result: CallToolResult) -> Any:
-    """Normalize CallToolResult into plain Python data."""
-    if result.data is not None:
-        return result.data
-    if result.structured_content:
-        return result.structured_content
-    if result.content:
-        texts: list[str] = []
-        for item in result.content:
+def _extract_result(result: list) -> Any:
+    """Normalize tool result (list of content items) into plain Python data."""
+    if not result:
+        return None
+    
+    # Extract text from TextContent items
+    texts: list[str] = []
+    structured_data = None
+    
+    for item in result:
+        if isinstance(item, types.TextContent):
             text = getattr(item, "text", None)
-            if text is not None:
-                texts.append(text)
-        if len(texts) == 1:
-            return texts[0]
-        if texts:
-            return texts
+            if text:
+                # Try to parse as JSON if it looks like structured data
+                text_str = str(text).strip()
+                if text_str.startswith("{") or text_str.startswith("["):
+                    try:
+                        import json
+                        parsed = json.loads(text_str)
+                        if isinstance(parsed, dict):
+                            structured_data = parsed
+                        else:
+                            texts.append(text)
+                    except (json.JSONDecodeError, ValueError):
+                        texts.append(text)
+                else:
+                    texts.append(text)
+        elif hasattr(item, "text"):
+            # Fallback for other content types with text attribute
+            texts.append(getattr(item, "text"))
+    
+    # Prefer structured data if found
+    if structured_data:
+        return structured_data
+    
+    # Return single text if only one, otherwise return list
+    if len(texts) == 1:
+        return texts[0]
+    if texts:
+        return texts
+    
     return None
 
 
