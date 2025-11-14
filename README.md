@@ -103,6 +103,8 @@ history/
 
 ### Load History
 
+## WARNING -- Load process may be slow and costly depending on the model you choose for it!
+
 **Load OpenAI conversations:**
 ```bash
 python scripts/load_history.py --provider openai
