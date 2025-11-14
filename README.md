@@ -19,7 +19,8 @@ Perfect for creating a personal AI assistant that knows everything about you fro
 
 - Python 3.10+
 - PostgreSQL 14+ with pgvector extension
-- OpenAI API key OR Anthropic API key
+- OpenRouter API key (for LLM)
+- Cohere API key (for embeddings)
 
 ### Step 1: Setup
 
@@ -42,20 +43,17 @@ Create a `.env` file in the project root:
 # Database connection
 DATABASE_URL=postgresql://digitalme:digitalme@localhost:5432/digitalme
 
-# LLM Provider (choose one: 'openai' or 'anthropic')
-LLM_PROVIDER=openai
+# OpenRouter Configuration (for LLM)
+# OpenRouter allows you to use OpenAI, Anthropic, and other models
+OPENROUTER_API_KEY=your_openrouter_api_key_here
+OPENROUTER_MODEL=openai/gpt-4o  # or anthropic/claude-3-5-sonnet, etc.
+LLM_TEMPERATURE=0.7
 
-# OpenAI Configuration (if using OpenAI)
-OPENAI_API_KEY=your_openai_api_key_here
-OPENAI_MODEL=gpt-4o
-OPENAI_EMBEDDINGS_MODEL=text-embedding-3-small
-
-# Anthropic Configuration (if using Anthropic)
-ANTHROPIC_API_KEY=your_anthropic_api_key_here
-ANTHROPIC_MODEL=claude-3-5-sonnet-20241022
-
-# Embeddings Provider
-EMBEDDINGS_PROVIDER=openai
+# Cohere Configuration (for embeddings)
+COHERE_API_KEY=your_cohere_api_key_here
+EMBEDDING_PROVIDER=cohere-v2
+EMBEDDING_MODEL=embed-english-v2.0
+COHERE_TRUNCATE=END
 ```
 
 ### Step 3: Start PostgreSQL
@@ -304,8 +302,8 @@ docker-compose up -d
 
 This server follows ZFC (Zero Framework Cognition) principles - pure orchestration that delegates ALL reasoning to external AI. The server provides:
 - Database persistence (PostgreSQL/pgvector)
-- LLM integration (OpenAI or Anthropic via LangChain)
-- Vector embeddings for semantic search
+- LLM integration (OpenRouter - supports OpenAI, Anthropic, and other models)
+- Vector embeddings (Cohere) for semantic search
 - MCP protocol interface (streamable HTTP)
 
 All reasoning, processing, and decision-making is handled by external AI models.
