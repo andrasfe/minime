@@ -516,7 +516,7 @@ def answer_question(question: str) -> dict:
                     FROM chat_summaries
                     WHERE embedding <=> %s::vector < 0.7
                     ORDER BY embedding <=> %s::vector
-                    LIMIT 80;
+                    LIMIT 100;
                 """, (question_embedding_array, question_embedding_array, question_embedding_array))
                 semantic_summaries = cur.fetchall()
                 
@@ -534,7 +534,7 @@ def answer_question(question: str) -> dict:
                                1.0 as similarity
                         FROM chat_summaries
                         WHERE {' OR '.join(keyword_conditions)}
-                        LIMIT 80;
+                        LIMIT 100;
                     """
                     cur.execute(keyword_query, tuple(keyword_params))
                     keyword_summaries = cur.fetchall()
@@ -557,8 +557,8 @@ def answer_question(question: str) -> dict:
                         relevant_summaries.append(summary)
                         seen_text_hashes.add(text_hash)
                 
-                # Limit to top 80 total
-                relevant_summaries = relevant_summaries[:80]
+                # Limit to top 100 total
+                relevant_summaries = relevant_summaries[:100]
                 
                 # Get digital_me summary
                 cur.execute("SELECT summary_text FROM digital_me WHERE id = 1;")

@@ -1,70 +1,46 @@
 # Digital Me MCP Server
 
-An intelligent MCP (Model Context Protocol) server that stores chat summaries in PostgreSQL/pgvector for RAG (Retrieval Augmented Generation) and maintains a "digital me" profile that continuously learns about you.
+Extract your "digital twin" from existing popular chatbots (ChatGPT, Claude) and create a searchable knowledge base about yourself.
 
-## Features
+## What This Is Good For
 
-- **Store Chat Summaries**: Process and store chat summaries with LLM-optimized RAG formatting
-- **Digital Me Profile**: Maintains a single comprehensive summary about you that updates with each new chat
-- **Question Answering**: Answer ad-hoc questions about yourself using semantic search across all stored summaries
+Have you had thousands of conversations with ChatGPT or Claude? This tool extracts all that knowledge into a single searchable database - your "digital twin". You can:
 
-## Architecture
+- **Import your chat history** from OpenAI (ChatGPT) and Anthropic (Claude)
+- **Ask questions** about yourself: "What are my interests?", "What did I say about quantum computing?"
+- **Get comprehensive answers** based on all your past conversations
+- **Build a persistent knowledge base** that grows with every conversation
 
-This server follows ZFC (Zero Framework Cognition) principles - it's pure orchestration that delegates ALL reasoning to external AI. The server provides:
+Perfect for creating a personal AI assistant that knows everything about you from your chat history.
 
-- Database persistence (PostgreSQL/pgvector)
-- LLM integration (OpenAI or Anthropic via LangChain)
-- Vector embeddings for semantic search
-- MCP protocol interface (streamable HTTP)
+## Quick Start: Database and MCP Server
 
-All reasoning, processing, and decision-making is handled by external AI models.
-
-## Prerequisites
+### Prerequisites
 
 - Python 3.10+
 - PostgreSQL 14+ with pgvector extension
 - OpenAI API key OR Anthropic API key
 
-## Setup
-
-### 1. Create Virtual Environment
-
-It's recommended to use a virtual environment to isolate dependencies:
+### Step 1: Setup
 
 ```bash
 # Create virtual environment
 python3 -m venv venv
+source venv/bin/activate  # Linux/Mac
+# venv\Scripts\activate  # Windows
 
-# Activate virtual environment
-# On Linux/Mac:
-source venv/bin/activate
-
-# On Windows:
-# venv\Scripts\activate
-```
-
-### 2. Install Dependencies
-
-```bash
-# Make sure virtual environment is activated
+# Install dependencies
 pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-### 3. Set Up PostgreSQL with pgvector
-
-```bash
-# Install pgvector extension in your PostgreSQL database
-psql -d your_database -c "CREATE EXTENSION IF NOT EXISTS vector;"
-```
-
-### 4. Configure Environment Variables
+### Step 2: Configure Environment
 
 Create a `.env` file in the project root:
 
 ```env
-# Database
-DATABASE_URL=postgresql://user:password@localhost:5432/database_name
+# Database connection
+DATABASE_URL=postgresql://digitalme:digitalme@localhost:5432/digitalme
 
 # LLM Provider (choose one: 'openai' or 'anthropic')
 LLM_PROVIDER=openai
@@ -78,498 +54,56 @@ OPENAI_EMBEDDINGS_MODEL=text-embedding-3-small
 ANTHROPIC_API_KEY=your_anthropic_api_key_here
 ANTHROPIC_MODEL=claude-3-5-sonnet-20241022
 
-# Embeddings Provider (currently only 'openai' supported)
+# Embeddings Provider
 EMBEDDINGS_PROVIDER=openai
 ```
 
-### 5. Start PostgreSQL Database
+### Step 3: Start PostgreSQL
 
-**IMPORTANT:** PostgreSQL must be running before starting the MCP server.
-
-**Option A: Using Docker (Recommended)**
+**Option A: Using Docker (Easiest)**
 ```bash
-# Start PostgreSQL container
 docker-compose up -d postgres
-
-# Verify it's running
-docker-compose ps
-
-# Check if PostgreSQL is ready
-docker-compose exec postgres pg_isready -U digitalme
 ```
 
-**Option B: Local PostgreSQL Installation**
-If you have PostgreSQL installed locally, make sure:
-- PostgreSQL service is running
-- The database specified in `DATABASE_URL` exists
-- pgvector extension can be installed (see step 3 above)
-
-### 6. Run the Server
-
-**Make sure your virtual environment is activated:**
+**Option B: Local PostgreSQL**
 ```bash
-source venv/bin/activate  # Linux/Mac
-# or
-venv\Scripts\activate      # Windows
+# Make sure PostgreSQL is running and create the database
+createdb digitalme
+psql -d digitalme -c "CREATE EXTENSION IF NOT EXISTS vector;"
 ```
 
-**IMPORTANT:** Ensure PostgreSQL is running before starting the server (see step 4 above).
+### Step 4: Start MCP Server
 
-The server can be run in two modes:
-
-**Standard stdio mode (for MCP clients):**
 ```bash
+# Make sure virtual environment is activated
+source venv/bin/activate
+
+# Start the server (runs on http://127.0.0.1:8000/mcp)
 python mcp_server.py
 ```
 
-**HTTP mode (for streamable HTTP protocol):**
-FastMCP automatically supports streamable HTTP when configured in your MCP client. The server will automatically:
-- Initialize the database schema
-- Create necessary tables and indexes
-- Set up the pgvector extension
+The server will automatically initialize the database schema and create necessary tables.
 
-**Note:** If you see a connection error, make sure PostgreSQL is running:
-- With Docker: `docker-compose up -d postgres`
-- Locally: Check your PostgreSQL service status
+## Loading Your Chat History
 
-## MCP Tools
+Import your conversations from ChatGPT or Claude into your digital twin database.
 
-### 1. `store_chat_summary`
+### Prepare Your Exports
 
-Stores a chat summary in the database for RAG retrieval.
+1. **OpenAI (ChatGPT)**: Export your conversations from ChatGPT settings
+2. **Anthropic (Claude)**: Export your conversations from Claude settings
 
-**Input:**
-- `summary` (string): A summary of a chat conversation
-
-**Process:**
-1. Uses LLM to process the summary into optimal RAG format
-2. Generates embeddings for vector search
-3. Stores in PostgreSQL/pgvector
-4. Updates the "digital me" record with new information
-
-**Output:**
-- Status and details about the stored summary
-
-### LangChain CLI Client
-
-Ask questions from the terminal using LangChain with the Digital Me MCP server:
-
-```bash
-python scripts/minime_client.py --question "What domains of quantum research is minime focused on?"
-```
-
-Optional flags:
-
-- `--url` – MCP server base URL (default: `http://127.0.0.1:8000/mcp`)
-- `--format json` – output the raw JSON response
-
-### 2. `get_digital_me`
-
-Retrieves the comprehensive "digital me" summary record.
-
-**Output:**
-- The current digital me summary and last update timestamp
-
-### 3. `answer_question`
-
-Answers ad-hoc questions about you using RAG retrieval.
-
-**Input:**
-- `question` (string): A question about you (e.g., "Is Andras interested in quantum computing?")
-
-**Process:**
-1. Searches chat summaries and digital_me using semantic search
-2. Retrieves relevant context
-3. Uses LLM to answer based on retrieved context
-
-**Output:**
-- Answer to the question and number of context sources used
-
-## Database Schema
-
-### `chat_summaries` Table
-
-Stores individual chat summaries with vector embeddings:
-
-- `id`: Primary key
-- `summary_text`: LLM-processed summary text (optimized for RAG)
-- `embedding`: Vector embedding (1536 dimensions for OpenAI)
-- `metadata`: JSONB field for additional metadata
-- `created_at`: Timestamp
-- `updated_at`: Timestamp
-
-### `digital_me` Table
-
-Single record containing the comprehensive user profile:
-
-- `id`: Always 1 (enforced by constraint)
-- `summary_text`: Comprehensive summary about the user
-- `embedding`: Vector embedding for semantic search
-- `updated_at`: Last update timestamp
-
-## Usage Example
-
-### Connecting to MCP Client
-
-Add to your MCP client configuration (e.g., `~/.config/claude/config.json`):
-
-```json
-{
-  "mcpServers": {
-    "digital-me": {
-      "command": "python",
-      "args": ["/path/to/mcp_server.py"],
-      "env": {
-        "DATABASE_URL": "postgresql://user:password@localhost:5432/dbname",
-        "LLM_PROVIDER": "openai",
-        "OPENAI_API_KEY": "your_key_here"
-      }
-    }
-  }
-}
-```
-
-### Using the Tools
-
-Once connected, you can use the tools from your MCP client:
-
-1. **Store a chat summary:**
-   ```
-   store_chat_summary("Had a conversation about quantum computing and machine learning. Discussed interest in building AI agents.")
-   ```
-
-2. **Get your digital profile:**
-   ```
-   get_digital_me()
-   ```
-
-3. **Ask a question:**
-   ```
-   answer_question("Is Andras interested in quantum computing?")
-   ```
-
-## ZFC Compliance
-
-This server is designed according to ZFC (Zero Framework Cognition) principles:
-
-✅ **Allowed (ZFC-Compliant):**
-- IO and plumbing (database operations, file I/O)
-- Structural safety checks (schema validation, required fields)
-- Policy enforcement (timeouts, error handling)
-- Mechanical transforms (parameter substitution, formatting)
-- State management (database persistence)
-
-❌ **Forbidden (ZFC-Violations):**
-- Local intelligence/reasoning (all delegated to LLM)
-- Ranking/scoring/selection algorithms
-- Plan/composition/scheduling decisions
-- Semantic analysis (handled by LLM)
-- Heuristic classification
-
-All reasoning is delegated to external AI models via LangChain.
-
-## Testing
-
-The project includes comprehensive unit and integration tests.
-
-### Setup for Testing
-
-1. **Activate your virtual environment:**
-   ```bash
-   source venv/bin/activate  # Linux/Mac
-   # or
-   venv\Scripts\activate    # Windows
-   ```
-
-2. **Install test dependencies (if not already installed):**
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-### Running Tests
-
-**Run all tests:**
-```bash
-# Make sure virtual environment is activated
-pytest
-```
-
-**Run only unit tests (no database required):**
-```bash
-pytest tests/test_unit.py
-```
-
-**Run only integration tests (requires test database):**
-```bash
-export TEST_DATABASE_URL=postgresql://user:password@localhost:5432/test_db
-pytest tests/test_integration.py -m integration
-```
-
-**Run only Docker integration tests (requires Docker):**
-```bash
-pytest tests/test_docker_integration.py -m docker -v
-```
-
-**Run with coverage:**
-```bash
-pytest --cov=mcp_server --cov-report=html
-```
-
-**Run specific test file:**
-```bash
-pytest tests/test_unit.py::TestStoreChatSummary -v
-```
-
-### Test Examples
-
-**Complete test workflow in virtual environment:**
-```bash
-# 1. Create and activate venv
-python3 -m venv venv
-source venv/bin/activate
-
-# 2. Install dependencies
-pip install -r requirements.txt
-
-# 3. Run unit tests (no external dependencies)
-pytest tests/test_unit.py -v
-
-# 4. Run integration tests (requires database)
-export TEST_DATABASE_URL=postgresql://user:password@localhost:5432/test_db
-pytest tests/test_integration.py -m integration -v
-
-# 5. Run all tests with coverage
-pytest --cov=mcp_server --cov-report=term-missing
-```
-
-**Deactivate virtual environment when done:**
-```bash
-deactivate
-```
-
-See `tests/README.md` for detailed testing documentation.
-
-## Docker Setup
-
-The project includes Docker support with persistent storage for the database.
-
-### Prerequisites
-
-- Docker and Docker Compose installed
-- Environment variables configured (see `.env.example`)
-
-### Quick Start with Docker
-
-1. **Set up environment variables:**
-   ```bash
-   cp .env.example .env
-   # Edit .env with your API keys
-   ```
-
-2. **Start services:**
-   ```bash
-   docker-compose up -d --build
-   ```
-
-3. **Verify services are running:**
-   ```bash
-   docker-compose ps
-   ```
-
-4. **View logs:**
-   ```bash
-   docker-compose logs -f mcp-server
-   docker-compose logs -f postgres
-   ```
-
-5. **Stop services:**
-   ```bash
-   docker-compose down
-   ```
-
-6. **Stop and remove volumes (deletes data):**
-   ```bash
-   docker-compose down -v
-   ```
-
-### Docker Architecture
-
-The Docker setup includes:
-
-- **PostgreSQL with pgvector**: Database with vector extension
-- **MCP Server**: Application server
-- **Persistent Volumes**: Database data persists across container restarts
-- **Docker Network**: Isolated network for container communication
-
-### Persistent Storage
-
-Database files are stored in a Docker volume named `digital-me-postgres-data`. This ensures:
-
-- Data persists when containers are stopped/restarted
-- Data persists when containers are recreated
-- Data is only deleted when explicitly removing volumes
-
-**View volumes:**
-```bash
-docker volume ls
-docker volume inspect digital-me-postgres-data
-```
-
-### Database Backup and Restore
-
-The project includes scripts and workflows for backing up and restoring the PostgreSQL database.
-
-#### Recommended Method: SQL Dump (pg_dump)
-
-The recommended approach uses PostgreSQL's `pg_dump` tool, which creates portable SQL backups.
-
-**Using the backup script:**
-```bash
-# Create a backup (automatically compressed)
-./scripts/backup_db.sh
-
-# Or specify a custom backup file
-./scripts/backup_db.sh backups/my_backup.sql
-```
-
-**Manual backup:**
-```bash
-# Create backup directory
-mkdir -p backups
-
-# Create SQL backup
-docker-compose exec postgres pg_dump \
-  -U digitalme \
-  -d digitalme \
-  --clean \
-  --if-exists \
-  > backups/backup_$(date +%Y%m%d_%H%M%S).sql
-
-# Compress the backup
-gzip backups/backup_*.sql
-```
-
-**Restore from backup:**
-```bash
-# Using the restore script (with confirmation prompt)
-./scripts/restore_db.sh backups/backup_20241110_120000.sql.gz
-
-# Manual restore
-gunzip -c backups/backup_20241110_120000.sql.gz | \
-  docker-compose exec -T postgres psql -U digitalme -d digitalme
-```
-
-**WARNING:** Restoring will replace all existing data in the database. Always create a backup before restoring.
-
-#### Alternative Method: Volume Backup
-
-For complete volume-level backups (includes all PostgreSQL files):
-
-**Backup volume:**
-```bash
-# Create backup directory
-mkdir -p backups
-
-# Backup the entire volume
-docker run --rm \
-  -v digital-me-postgres-data:/data \
-  -v $(pwd)/backups:/backup \
-  alpine tar czf /backup/volume_backup_$(date +%Y%m%d_%H%M%S).tar.gz -C /data .
-```
-
-**Restore volume:**
-```bash
-# WARNING: This requires stopping the database first
-docker-compose down
-
-# Restore the volume
-docker run --rm \
-  -v digital-me-postgres-data:/data \
-  -v $(pwd)/backups:/backup \
-  alpine sh -c "cd /data && rm -rf * && tar xzf /backup/volume_backup_20241110_120000.tar.gz"
-
-# Start services again
-docker-compose up -d
-```
-
-#### Backup Best Practices
-
-1. **Regular Backups**: Schedule automated backups (e.g., daily) using cron or a scheduler
-2. **Off-site Storage**: Store backups in a separate location (cloud storage, different server)
-3. **Test Restores**: Periodically test restore procedures to ensure backups are valid
-4. **Retention Policy**: Keep multiple backup versions (daily, weekly, monthly)
-5. **Before Major Changes**: Always create a backup before schema migrations or data updates
-
-**Example cron job for daily backups:**
-```bash
-# Add to crontab (crontab -e)
-0 2 * * * cd /path/to/minime && ./scripts/backup_db.sh backups/daily/backup_$(date +\%Y\%m\%d).sql
-```
-
-#### Backup File Locations
-
-- **SQL backups**: Stored in `./backups/` directory (created automatically)
-- **Volume backups**: Can be stored anywhere, but `./backups/` is recommended
-- **Backup files**: Include timestamps in filenames for easy identification
-
-### Docker Integration Tests
-
-Run Docker integration tests to verify the setup:
-
-```bash
-# Run all Docker tests
-pytest tests/test_docker_integration.py -m docker -v
-
-# Or use the test script
-./scripts/test_docker.sh
-```
-
-Docker tests verify:
-- Containers start correctly
-- PostgreSQL has pgvector extension
-- Database operations work
-- Data persists across restarts
-- Network communication works
-
-### Docker Compose Configuration
-
-The `docker-compose.yml` file configures:
-
-- **PostgreSQL service**: Port 5432, persistent volume
-- **MCP Server service**: Depends on PostgreSQL, uses environment variables
-- **Network**: Isolated bridge network
-- **Volumes**: Named volume for database persistence
-
-### Environment Variables in Docker
-
-Environment variables can be set in:
-
-1. `.env` file (loaded automatically by docker-compose)
-2. `docker-compose.yml` (for defaults)
-3. Command line: `docker-compose run -e VAR=value mcp-server`
-
-## Loading Conversation History
-
-The `load_history.py` script allows you to import conversation history from OpenAI (ChatGPT) or Anthropic (Claude) into your Digital Me database.
-
-### Supported Providers
-
-- **OpenAI**: ChatGPT conversation exports
-- **Anthropic**: Claude conversation exports
-
-### Directory Structure
-
-Place your conversation exports in the appropriate directory:
+Place the exported files in the appropriate directory:
 
 ```
 history/
-├── openAI/          # OpenAI ChatGPT exports
-│   └── [export directories with conversations.json files]
-└── anthropic/       # Anthropic Claude exports
-    └── [export directories with conversations.json files]
+├── openAI/          # Put ChatGPT exports here
+│   └── [your exported files]
+└── anthropic/       # Put Claude exports here
+    └── [your exported files]
 ```
 
-### Usage
+### Load History
 
 **Load OpenAI conversations:**
 ```bash
@@ -581,109 +115,157 @@ python scripts/load_history.py --provider openai
 python scripts/load_history.py --provider anthropic
 ```
 
-**Load from custom directory:**
-```bash
-python scripts/load_history.py --provider openai --directory /path/to/conversations
-```
-
-**Dry run (preview without loading):**
+**Preview before loading (dry run):**
 ```bash
 python scripts/load_history.py --provider anthropic --dry-run
 ```
 
-**Specify custom MCP server URL:**
+The script will:
+- Process all conversations automatically
+- Skip duplicates (already loaded conversations)
+- Show progress and summary
+
+## Running Inference (Asking Questions)
+
+Ask questions about yourself from the command line:
+
 ```bash
-python scripts/load_history.py --provider openai --url http://localhost:9000/mcp
+python scripts/minime_client.py --question "What domains of quantum research am I focused on?"
 ```
 
-### Conversation Format Validation
-
-The script automatically validates conversation structure:
-
-**OpenAI format** requires:
-- `mapping` field (conversation messages)
-- OR `title` field (conversation metadata)
-
-**Anthropic format** requires:
-- `uuid` field (conversation ID)
-- `chat_messages` array
-- `created_at` timestamp
-
-Invalid conversations are skipped with a validation error message.
-
-### Features
-
-- **Duplicate detection**: Automatically skips conversations already in the database (using SHA256 hash)
-- **Format validation**: Validates conversation structure before processing
-- **Progress tracking**: Shows real-time progress with file counts and status
-- **Error handling**: Graceful handling of malformed files and connection issues
-- **Batch processing**: Processes all JSON/TXT files in directory tree recursively
-
-### Example Output
-
-```
-Found 150 files to process (provider: anthropic)
-Checking connection to MCP server at http://127.0.0.1:8000/mcp...
-✅ Server connection OK
-
-Processing: anthropic/data-2025-11-13/conversations.json
-  Summary 1/50
-  ✅ Loaded successfully (ID: 1234)
-  Summary 2/50
-  ⏭️  Skipped - already exists in database (ID: 1235)
-  ...
-
-==================================================
-Summary: 45 loaded, 5 skipped, 0 failed, 0 validation errors
-```
-
-### Troubleshooting
-
-**Database connection issues:**
-
-If you see `Connection refused` or `DATABASE_URL not found` errors:
-
-1. **Check if PostgreSQL is running:**
-   ```bash
-   # With Docker
-   docker-compose ps
-   docker-compose exec postgres pg_isready -U digitalme
-   
-   # If not running, start it:
-   docker-compose up -d postgres
-   ```
-
-2. **Verify DATABASE_URL in .env:**
-   ```bash
-   # Check your .env file has the correct connection string
-   grep DATABASE_URL .env
-   
-   # For Docker: postgresql://digitalme:digitalme@localhost:5432/digitalme
-   # For local: postgresql://user:password@localhost:5432/database_name
-   ```
-
-3. **Check PostgreSQL logs:**
-   ```bash
-   docker-compose logs postgres
-   ```
-
-4. **Test connection manually:**
-   ```bash
-   # With Docker
-   docker-compose exec postgres psql -U digitalme -d digitalme -c "SELECT version();"
-   ```
-
-**Volume issues:**
+**Output format options:**
 ```bash
-# List volumes
-docker volume ls
+# Human-readable (default)
+python scripts/minime_client.py --question "What are my main interests?"
 
-# Inspect volume
-docker volume inspect digital-me-postgres-data
+# JSON format
+python scripts/minime_client.py --question "What are my main interests?" --format json
 
-# Remove and recreate volume (WARNING: deletes data)
+# Custom server URL
+python scripts/minime_client.py --question "..." --url http://localhost:9000/mcp
+```
+
+The system searches through all your imported conversations and provides comprehensive answers based on your chat history.
+
+## MCP Server Integration
+
+The MCP server can be integrated into chatbots and AI assistants (Claude Desktop, ChatGPT, etc.) to provide your digital twin as context. Integration details and configuration examples will be documented separately.
+
+**Basic integration:** Add the MCP server to your chatbot's configuration file. The server exposes three main tools:
+- `store_chat_summary` - Store new conversations
+- `get_digital_me` - Retrieve your digital twin profile
+- `answer_question` - Ask questions about yourself
+
+## Backup and Restore
+
+### Create Backup
+
+```bash
+# Using the backup script (recommended)
+./scripts/backup_db.sh
+
+# Or specify custom location
+./scripts/backup_db.sh backups/my_backup.sql
+```
+
+Backups are automatically compressed and saved to the `backups/` directory.
+
+### Restore from Backup
+
+```bash
+# Using the restore script (with confirmation)
+./scripts/restore_db.sh backups/backup_20241110_120000.sql.gz
+```
+
+**⚠️ WARNING:** Restoring will replace all existing data. Always backup first!
+
+### Manual Backup/Restore
+
+**Backup:**
+```bash
+mkdir -p backups
+docker-compose exec postgres pg_dump -U digitalme -d digitalme --clean --if-exists > backups/backup_$(date +%Y%m%d_%H%M%S).sql
+gzip backups/backup_*.sql
+```
+
+**Restore:**
+```bash
+gunzip -c backups/backup_20241110_120000.sql.gz | docker-compose exec -T postgres psql -U digitalme -d digitalme
+```
+
+---
+
+## Docker Setup (Advanced)
+
+For users who prefer Docker for everything.
+
+### Quick Start with Docker
+
+```bash
+# 1. Create .env file (see Step 2 above)
+
+# 2. Start all services
+docker-compose up -d --build
+
+# 3. Verify services are running
+docker-compose ps
+
+# 4. View logs
+docker-compose logs -f mcp-server
+docker-compose logs -f postgres
+
+# 5. Stop services
+docker-compose down
+
+# 6. Stop and remove volumes (deletes data)
 docker-compose down -v
-docker-compose up -d
+```
+
+### Docker Architecture
+
+- **PostgreSQL with pgvector**: Database with vector extension (port 5432)
+- **MCP Server**: Application server (port 8000)
+- **Persistent Volumes**: Database data persists across restarts
+- **Docker Network**: Isolated network for container communication
+
+### Persistent Storage
+
+Database files are stored in Docker volume `digital-me-postgres-data`:
+- Data persists when containers are stopped/restarted
+- Data persists when containers are recreated
+- Data is only deleted when explicitly removing volumes
+
+**View volumes:**
+```bash
+docker volume ls
+docker volume inspect digital-me-postgres-data
+```
+
+### Docker Backup/Restore
+
+**Backup:**
+```bash
+docker-compose exec postgres pg_dump -U digitalme -d digitalme --clean --if-exists > backups/backup_$(date +%Y%m%d_%H%M%S).sql
+gzip backups/backup_*.sql
+```
+
+**Restore:**
+```bash
+gunzip -c backups/backup_20241110_120000.sql.gz | docker-compose exec -T postgres psql -U digitalme -d digitalme
+```
+
+### Docker Troubleshooting
+
+**Check if services are running:**
+```bash
+docker-compose ps
+docker-compose exec postgres pg_isready -U digitalme
+```
+
+**View logs:**
+```bash
+docker-compose logs postgres
+docker-compose logs mcp-server
 ```
 
 **Rebuild containers:**
@@ -692,7 +274,61 @@ docker-compose build --no-cache
 docker-compose up -d
 ```
 
+**Reset everything (WARNING: deletes data):**
+```bash
+docker-compose down -v
+docker-compose up -d
+```
+
+---
+
+## Technical Details
+
+### Database Schema
+
+**`chat_summaries` Table:**
+- Stores individual chat summaries with vector embeddings
+- Fields: `id`, `summary_text`, `embedding`, `metadata`, `created_at`, `updated_at`
+
+**`digital_me` Table:**
+- Single record containing comprehensive user profile
+- Fields: `id` (always 1), `summary_text`, `embedding`, `updated_at`
+
+### MCP Tools
+
+1. **`store_chat_summary(summary: str)`** - Store a chat summary in the database
+2. **`get_digital_me()`** - Retrieve the comprehensive digital me summary
+3. **`answer_question(question: str)`** - Answer questions using RAG retrieval
+
+### Architecture
+
+This server follows ZFC (Zero Framework Cognition) principles - pure orchestration that delegates ALL reasoning to external AI. The server provides:
+- Database persistence (PostgreSQL/pgvector)
+- LLM integration (OpenAI or Anthropic via LangChain)
+- Vector embeddings for semantic search
+- MCP protocol interface (streamable HTTP)
+
+All reasoning, processing, and decision-making is handled by external AI models.
+
+## Testing
+
+```bash
+# Run all tests
+pytest
+
+# Run only unit tests (no database required)
+pytest tests/test_unit.py
+
+# Run only integration tests (requires test database)
+export TEST_DATABASE_URL=postgresql://user:password@localhost:5432/test_db
+pytest tests/test_integration.py -m integration
+
+# Run with coverage
+pytest --cov=mcp_server --cov-report=html
+```
+
+See `tests/README.md` for detailed testing documentation.
+
 ## License
 
 MIT
-
