@@ -54,6 +54,16 @@ COHERE_API_KEY=your_cohere_api_key_here
 EMBEDDING_PROVIDER=cohere-v2
 EMBEDDING_MODEL=embed-english-v2.0
 COHERE_TRUNCATE=END
+
+# LangGraph Parallel Multi-Agent RAG Configuration (Optional)
+# Models for parallel sub-agent execution
+OPENROUTER_CENTRAL_AGENT_MODEL=openai/gpt-4o  # Model for all agents (generation & aggregation)
+CENTRAL_AGENT_TEMPERATURE=0.7
+
+# Recency Weighting Configuration (Optional)
+# Prioritize recent conversations in retrieval
+RECENCY_WEIGHT=0.3  # 0.0 = pure semantic, 1.0 = heavy recency bias (default: 0.3)
+RECENCY_DECAY_DAYS=180  # Half-life for time decay in days (default: 180)
 ```
 
 ### Step 3: Start PostgreSQL
@@ -133,11 +143,29 @@ Ask questions about yourself from the command line:
 python scripts/minime_client.py --question "What domains of quantum research am I focused on?"
 ```
 
-**Output format options:**
-```bash
-# Human-readable (default)
-python scripts/minime_client.py --question "What are my main interests?"
+### Research Depth Parameter
 
+Control how comprehensive your answers are with the `--depth` parameter:
+
+```bash
+# Basic mode (default): Single RAG query, fast and cost-effective
+python scripts/minime_client.py --question "What are my interests?" --depth 0
+
+# Deep mode: Multi-agent RAG with 3 parallel queries exploring different angles
+python scripts/minime_client.py --question "What are my interests?" --depth 3
+
+# Maximum depth: 5 parallel agents for most comprehensive answer
+python scripts/minime_client.py --question "What are my interests?" --depth 5
+```
+
+**Depth Options:**
+- `--depth 0` (default): Basic single-agent mode - fast, cost-effective
+- `--depth 1-5`: Multi-agent mode with N parallel sub-agents
+  - Higher depth = more comprehensive answers but higher cost and latency
+  - Recommended: `--depth 3` for complex questions
+
+**Other Output Options:**
+```bash
 # JSON format
 python scripts/minime_client.py --question "What are my main interests?" --format json
 
@@ -146,6 +174,87 @@ python scripts/minime_client.py --question "..." --url http://localhost:9000/mcp
 ```
 
 The system searches through all your imported conversations and provides comprehensive answers based on your chat history.
+
+### Multi-Agent RAG with LangGraph (Advanced)
+
+The system uses **LangGraph with parallel sub-agents** (based on [LangChain's agentic RAG pattern](https://docs.langchain.com/oss/python/langgraph/agentic-rag)) for comprehensive query processing:
+
+**How it works:**
+
+1. **Query Variant Generation**: Creates N different phrasings of your question
+2. **Parallel Sub-Agent Execution**: Each sub-agent independently:
+   - Retrieves top 100 relevant chunks from vector store
+   - Generates an answer using retrieved context
+   - Returns answer with confidence score
+3. **Aggregation**: Central agent synthesizes all sub-agent answers into comprehensive final response
+
+**Depth Parameter (Number of Parallel Sub-Agents):**
+
+- `depth=0` or `depth=1`: Single agent (fast, cost-effective)
+- `depth=2-5`: Multiple parallel sub-agents exploring different query angles
+  - `depth=3` (recommended): Good balance of comprehensiveness and cost
+  - `depth=5` (maximum): Most comprehensive but highest cost
+
+**Benefits:**
+
+- ✅ **Parallel execution**: Sub-agents run simultaneously for speed
+- ✅ **Multiple perspectives**: Different query variants explore different aspects
+- ✅ **Comprehensive answers**: Aggregation combines insights from all agents
+- ✅ **Efficiency**: Each agent retrieves top 100 docs (not N×100 redundant retrievals)
+- ✅ **Recency weighting**: Recent conversations are prioritized (configurable)
+
+**Configuration:**
+
+```env
+# Models for parallel agents
+OPENROUTER_CENTRAL_AGENT_MODEL=openai/gpt-4o  # For variant generation & aggregation
+OPENROUTER_SUBAGENT_MODEL=openai/gpt-4o-mini  # Not used (same model for all)
+```
+
+**Recency Weighting:**
+
+The system automatically prioritizes recent conversations using an exponential decay function:
+
+- **`RECENCY_WEIGHT`** (0.0-1.0): Controls how much to boost recent conversations
+  - `0.0`: Pure semantic search (no recency bias)
+  - `0.3` (default): Balanced - recent conversations get moderate boost
+  - `1.0`: Heavy recency bias - strongly favor recent conversations
+
+- **`RECENCY_DECAY_DAYS`** (default: 180): Half-life for time decay
+  - Conversations older than this get exponentially less boost
+  - 180 days = 6 months
+
+**Formula:** `boosted_similarity = base_similarity × (1 + recency_weight × exp(-days_old / recency_decay_days))`
+
+**Example:**
+- A conversation from 30 days ago with 0.7 semantic similarity → ~0.88 boosted similarity (with default settings)
+- A conversation from 1 year ago with 0.7 semantic similarity → ~0.75 boosted similarity
+
+**Example Query:**
+
+```bash
+# Single agent
+python scripts/minime_client.py --question "What are my interests?" --depth 0
+
+# 3 parallel agents (recommended)
+python scripts/minime_client.py --question "What are my interests?" --depth 3
+```
+
+**Output includes metadata:**
+
+```json
+{
+  "answer": "Comprehensive synthesized answer...",
+  "execution_mode": "langgraph_parallel_agents",
+  "num_agents": 3,
+  "depth": 3,
+  "total_chunks": 300,
+  "avg_confidence": 0.82,
+  "variants": ["variant 1", "variant 2", "variant 3"],
+  "recency_weight": 0.3,
+  "recency_decay_days": 180
+}
+```
 
 ## MCP Server Integration
 

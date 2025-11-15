@@ -64,7 +64,7 @@ def get_embedding_dimension() -> int:
 
 
 def get_llm():
-    """Initialize LLM based on .env configuration"""
+    """Initialize LLM based on .env configuration (for backwards compatibility)"""
     global llm
     if llm is not None:
         return llm
@@ -84,6 +84,46 @@ def get_llm():
     )
     
     return llm
+
+
+def get_central_agent_llm():
+    """Initialize LLM for central agent."""
+    api_key = os.getenv("OPENROUTER_API_KEY")
+    model = os.getenv("OPENROUTER_CENTRAL_AGENT_MODEL", os.getenv("OPENROUTER_MODEL"))
+    base_url = os.getenv("OPENROUTER_URL", "https://openrouter.ai/api/v1")
+    temperature = float(os.getenv("CENTRAL_AGENT_TEMPERATURE", "0.7"))
+    
+    if not api_key:
+        raise ValueError("OPENROUTER_API_KEY not found in .env")
+    if not model:
+        raise ValueError("OPENROUTER_CENTRAL_AGENT_MODEL or OPENROUTER_MODEL not found in .env")
+    
+    return OpenRouterChat(
+        api_key=api_key,
+        model=model,
+        base_url=base_url,
+        temperature=temperature,
+    )
+
+
+def get_subagent_llm():
+    """Initialize LLM for sub-agents."""
+    api_key = os.getenv("OPENROUTER_API_KEY")
+    model = os.getenv("OPENROUTER_SUBAGENT_MODEL", os.getenv("OPENROUTER_MODEL"))
+    base_url = os.getenv("OPENROUTER_URL", "https://openrouter.ai/api/v1")
+    temperature = float(os.getenv("SUBAGENT_TEMPERATURE", "0.7"))
+    
+    if not api_key:
+        raise ValueError("OPENROUTER_API_KEY not found in .env")
+    if not model:
+        raise ValueError("OPENROUTER_SUBAGENT_MODEL or OPENROUTER_MODEL not found in .env")
+    
+    return OpenRouterChat(
+        api_key=api_key,
+        model=model,
+        base_url=base_url,
+        temperature=temperature,
+    )
 
 
 def get_embeddings():
@@ -468,139 +508,208 @@ def get_digital_me() -> dict:
 
 
 @mcp.tool()
-def answer_question(question: str) -> dict:
+def answer_question(question: str, depth: int = 0) -> dict:
     """
     Answer a question about Andras using semantic search over his digital twin data.
     
-    This tool queries Andras's digital twin by:
-    1. Performing semantic vector search over stored chat summaries and conversations about Andras
-    2. Retrieving relevant context from Andras's digital me summary
-    3. Using an LLM to synthesize an accurate answer based on the retrieved information
+    This tool queries Andras's digital twin using single-agent or multi-agent RAG based on depth:
+    - depth=0 (basic): Single RAG query with central agent only (fast, cost-effective)
+    - depth=1-5 (advanced): Multi-agent RAG with N parallel sub-agents exploring different query variants
     
-    Use this to ask questions about Andras's interests, expertise, preferences, projects, goals, or any other aspect of his knowledge and context.
+    Higher depth provides more comprehensive answers but costs more tokens and takes longer.
     
     Args:
         question: A question about Andras (e.g., "What domains of quantum research is Andras focused on?", "What are Andras's interests?", "What projects is Andras working on?")
+        depth: Research depth (0=basic single-agent, 1-5=multi-agent with N variants). Default is 0.
         
     Returns:
         A dictionary containing the answer about Andras and the number of context sources used
     """
     try:
         init_database()
-        llm_client = get_llm()
-        embeddings_client = get_embeddings()
         
-        # Generate embedding for the question
-        question_embedding = embeddings_client.embed_query(question)
+        # Validate depth parameter
+        if depth < 0:
+            depth = 0
+        elif depth > 5:
+            depth = 5
         
-        # Extract potential keywords from question for hybrid search
-        # Focus on specific topic keywords, not names or user-related terms
-        keywords = []
-        # Extract quoted phrases
-        quoted = re.findall(r'"([^"]+)"', question)
-        keywords.extend(quoted)
-        # Extract lowercase words that might be important (remove common stop words AND user-related terms)
-        stop_words = {'is', 'are', 'was', 'were', 'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'about', 'what', 'where', 'when', 'who', 'why', 'how', 'does', 'do', 'did', 'has', 'have', 'had', 'will', 'would', 'could', 'should', 'may', 'might', 'can', 'this', 'that', 'these', 'those', 'i', 'you', 'he', 'she', 'it', 'we', 'they', 'user', 'users', 'person', 'people', 'inquire', 'inquired', 'ask', 'asked', 'tell', 'told', 'sort', 'kind', 'type'}
-        words = re.findall(r'\b[a-z]+\b', question.lower())
-        keywords.extend([w for w in words if w not in stop_words and len(w) > 3])
-        keywords = list(set(keywords))  # Remove duplicates
-        
-        # Search for relevant chat summaries
-        conn = get_db_connection()
-        try:
-            with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                # Convert embedding to numpy array for pgvector
-                question_embedding_array = np.array(question_embedding, dtype=np.float32)
-                
-                # HYBRID SEARCH: Combine semantic search with keyword search
-                semantic_summaries = []
-                keyword_summaries = []
-                
-                # 1. Semantic search with relaxed threshold
-                cur.execute("""
-                    SELECT summary_text, metadata,
-                           (1 - (embedding <=> %s::vector)) as similarity
-                    FROM chat_summaries
-                    WHERE embedding <=> %s::vector < 0.7
-                    ORDER BY embedding <=> %s::vector
-                    LIMIT 100;
-                """, (question_embedding_array, question_embedding_array, question_embedding_array))
-                semantic_summaries = cur.fetchall()
-                
-                # 2. Keyword search for exact matches (prioritize these)
-                if keywords:
-                    # Build keyword search query
-                    keyword_conditions = []
-                    keyword_params = []
-                    for keyword in keywords:
-                        keyword_conditions.append("summary_text ILIKE %s")
-                        keyword_params.append(f"%{keyword}%")
-                    
-                    keyword_query = f"""
-                        SELECT summary_text, metadata,
-                               1.0 as similarity
-                        FROM chat_summaries
-                        WHERE {' OR '.join(keyword_conditions)}
-                        LIMIT 100;
-                    """
-                    cur.execute(keyword_query, tuple(keyword_params))
-                    keyword_summaries = cur.fetchall()
-                
-                # Combine and deduplicate results (prioritize keyword matches)
-                seen_text_hashes = set()
-                relevant_summaries = []
-                
-                # First add keyword matches (higher priority, similarity = 1.0)
-                for summary in keyword_summaries:
-                    text_hash = hashlib.md5(summary['summary_text'].encode()).hexdigest()
-                    if text_hash not in seen_text_hashes:
-                        relevant_summaries.append(summary)
-                        seen_text_hashes.add(text_hash)
-                
-                # Then add semantic matches that aren't already included
-                for summary in semantic_summaries:
-                    text_hash = hashlib.md5(summary['summary_text'].encode()).hexdigest()
-                    if text_hash not in seen_text_hashes:
-                        relevant_summaries.append(summary)
-                        seen_text_hashes.add(text_hash)
-                
-                # Limit to top 100 total
-                relevant_summaries = relevant_summaries[:100]
-                
-                # Get digital_me summary
-                cur.execute("SELECT summary_text FROM digital_me WHERE id = 1;")
-                digital_me_result = cur.fetchone()
-                digital_me_summary = digital_me_result['summary_text'] if digital_me_result else ""
-        finally:
-            return_db_connection(conn)
-        
-        # Prepare context for LLM
-        context_parts = []
-        if digital_me_summary:
-            context_parts.append(f"Digital Me Summary (Andras's comprehensive profile):\n{digital_me_summary}")
-        
-        if relevant_summaries:
-            # Count keyword vs semantic matches
-            keyword_count = sum(1 for s in relevant_summaries if s.get('similarity', 0) >= 0.99)
-            semantic_count = len(relevant_summaries) - keyword_count
-            
-            context_parts.append(f"\nRelevant Chat Summaries ({len(relevant_summaries)} found: {keyword_count} keyword matches, {semantic_count} semantic matches):")
-            for i, summary in enumerate(relevant_summaries, 1):
-                similarity = summary.get('similarity', 0)
-                text = summary['summary_text']
-                match_type = "KEYWORD" if similarity >= 0.99 else "SEMANTIC"
-                # Truncate very long summaries to avoid token limits
-                if len(text) > 2000:
-                    text = text[:2000] + "... [truncated]"
-                context_parts.append(f"\n[{i}] [{match_type}] (similarity: {similarity:.3f})\n{text}")
+        # depth=0 means single-agent, depth>0 means multi-agent with that many variants
+        if depth == 0:
+            return _answer_question_single_agent(question)
         else:
-            context_parts.append("\nNo relevant chat summaries found via hybrid search (semantic + keyword).")
+            return _answer_question_multi_agent(question, num_variants=depth)
         
-        context = "\n\n".join(context_parts) if context_parts else "No relevant context found."
+    except Exception as e:
+        import traceback
+        return {
+            "status": "error",
+            "message": f"Failed to answer question: {str(e)}",
+            "traceback": traceback.format_exc()
+        }
+
+
+def _answer_question_multi_agent(question: str, num_variants: int = 3) -> dict:
+    """Answer question using parallel LangGraph agentic RAG system.
+    
+    Args:
+        question: User's question
+        num_variants: Number of parallel sub-agents (depth parameter)
+    """
+    from agents import run_agentic_rag
+    
+    # Get digital_me summary
+    conn = get_db_connection()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("SELECT summary_text FROM digital_me WHERE id = 1;")
+            digital_me_result = cur.fetchone()
+            digital_me_summary = digital_me_result['summary_text'] if digital_me_result else ""
+    finally:
+        pass  # Don't return connection yet, agents will use it
+    
+    # Get clients
+    llm_client = get_central_agent_llm()
+    embeddings_client = get_embeddings()
+    
+    # Get recency configuration
+    recency_weight = float(os.getenv("RECENCY_WEIGHT", "0.3"))
+    recency_decay_days = float(os.getenv("RECENCY_DECAY_DAYS", "180"))
+    
+    # Run parallel LangGraph agentic RAG
+    result = run_agentic_rag(
+        question=question,
+        llm_client=llm_client,
+        embeddings_client=embeddings_client,
+        db_connection=conn,
+        digital_me_summary=digital_me_summary,
+        depth=num_variants,
+        recency_weight=recency_weight,
+        recency_decay_days=recency_decay_days
+    )
+    
+    # Return connection
+    return_db_connection(conn)
+    
+    return result
+
+
+def _answer_question_single_agent(question: str) -> dict:
+    """Answer question using traditional single-agent approach."""
+    llm_client = get_llm()
+    embeddings_client = get_embeddings()
+    
+    # Generate embedding for the question
+    question_embedding = embeddings_client.embed_query(question)
+    
+    # Extract potential keywords from question for hybrid search
+    # Focus on specific topic keywords, not names or user-related terms
+    keywords = []
+    # Extract quoted phrases
+    quoted = re.findall(r'"([^"]+)"', question)
+    keywords.extend(quoted)
+    # Extract lowercase words that might be important (remove common stop words AND user-related terms)
+    stop_words = {'is', 'are', 'was', 'were', 'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'about', 'what', 'where', 'when', 'who', 'why', 'how', 'does', 'do', 'did', 'has', 'have', 'had', 'will', 'would', 'could', 'should', 'may', 'might', 'can', 'this', 'that', 'these', 'those', 'i', 'you', 'he', 'she', 'it', 'we', 'they', 'user', 'users', 'person', 'people', 'inquire', 'inquired', 'ask', 'asked', 'tell', 'told', 'sort', 'kind', 'type'}
+    words = re.findall(r'\b[a-z]+\b', question.lower())
+    keywords.extend([w for w in words if w not in stop_words and len(w) > 3])
+    keywords = list(set(keywords))  # Remove duplicates
+    
+    # Search for relevant chat summaries
+    conn = get_db_connection()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            # Convert embedding to numpy array for pgvector
+            question_embedding_array = np.array(question_embedding, dtype=np.float32)
+            
+            # HYBRID SEARCH: Combine semantic search with keyword search
+            semantic_summaries = []
+            keyword_summaries = []
+            
+            # 1. Semantic search with relaxed threshold
+            cur.execute("""
+                SELECT summary_text, metadata,
+                       (1 - (embedding <=> %s::vector)) as similarity
+                FROM chat_summaries
+                WHERE embedding <=> %s::vector < 0.7
+                ORDER BY embedding <=> %s::vector
+                LIMIT 100;
+            """, (question_embedding_array, question_embedding_array, question_embedding_array))
+            semantic_summaries = cur.fetchall()
+            
+            # 2. Keyword search for exact matches (prioritize these)
+            if keywords:
+                # Build keyword search query
+                keyword_conditions = []
+                keyword_params = []
+                for keyword in keywords:
+                    keyword_conditions.append("summary_text ILIKE %s")
+                    keyword_params.append(f"%{keyword}%")
+                
+                keyword_query = f"""
+                    SELECT summary_text, metadata,
+                           1.0 as similarity
+                    FROM chat_summaries
+                    WHERE {' OR '.join(keyword_conditions)}
+                    LIMIT 100;
+                """
+                cur.execute(keyword_query, tuple(keyword_params))
+                keyword_summaries = cur.fetchall()
+            
+            # Combine and deduplicate results (prioritize keyword matches)
+            seen_text_hashes = set()
+            relevant_summaries = []
+            
+            # First add keyword matches (higher priority, similarity = 1.0)
+            for summary in keyword_summaries:
+                text_hash = hashlib.md5(summary['summary_text'].encode()).hexdigest()
+                if text_hash not in seen_text_hashes:
+                    relevant_summaries.append(summary)
+                    seen_text_hashes.add(text_hash)
+            
+            # Then add semantic matches that aren't already included
+            for summary in semantic_summaries:
+                text_hash = hashlib.md5(summary['summary_text'].encode()).hexdigest()
+                if text_hash not in seen_text_hashes:
+                    relevant_summaries.append(summary)
+                    seen_text_hashes.add(text_hash)
+            
+            # Limit to top 100 total
+            relevant_summaries = relevant_summaries[:100]
+            
+            # Get digital_me summary
+            cur.execute("SELECT summary_text FROM digital_me WHERE id = 1;")
+            digital_me_result = cur.fetchone()
+            digital_me_summary = digital_me_result['summary_text'] if digital_me_result else ""
+    finally:
+        return_db_connection(conn)
+    
+    # Prepare context for LLM
+    context_parts = []
+    if digital_me_summary:
+        context_parts.append(f"Digital Me Summary (Andras's comprehensive profile):\n{digital_me_summary}")
+    
+    if relevant_summaries:
+        # Count keyword vs semantic matches
+        keyword_count = sum(1 for s in relevant_summaries if s.get('similarity', 0) >= 0.99)
+        semantic_count = len(relevant_summaries) - keyword_count
         
-        # Use LLM to answer the question
-        answer_prompt = ChatPromptTemplate.from_messages([
-            ("system", """You are an assistant that answers questions about Andras (also known as András Ferenczi) based on his chat history and digital twin profile.
+        context_parts.append(f"\nRelevant Chat Summaries ({len(relevant_summaries)} found: {keyword_count} keyword matches, {semantic_count} semantic matches):")
+        for i, summary in enumerate(relevant_summaries, 1):
+            similarity = summary.get('similarity', 0)
+            text = summary['summary_text']
+            match_type = "KEYWORD" if similarity >= 0.99 else "SEMANTIC"
+            # Truncate very long summaries to avoid token limits
+            if len(text) > 2000:
+                text = text[:2000] + "... [truncated]"
+            context_parts.append(f"\n[{i}] [{match_type}] (similarity: {similarity:.3f})\n{text}")
+    else:
+        context_parts.append("\nNo relevant chat summaries found via hybrid search (semantic + keyword).")
+    
+    context = "\n\n".join(context_parts) if context_parts else "No relevant context found."
+    
+    # Use LLM to answer the question
+    answer_prompt = ChatPromptTemplate.from_messages([
+        ("system", """You are an assistant that answers questions about Andras (also known as András Ferenczi) based on his chat history and digital twin profile.
 
 CRITICAL IDENTITY MAPPING:
 - ANY reference to "User", "user", "the user", or "user profile" in the context refers to ANDRAS
@@ -621,43 +730,39 @@ If the question asks about specific topics, places, interests, or activities (li
 Use the provided context to answer the question accurately and comprehensively. Include specific details, examples, and nuances from the context. 
 
 Be factual and thorough. Focus on what the context tells you about Andras specifically. Do NOT dismiss conversations as "belonging to a different user" or say "there is no record" when the context clearly contains relevant information about "User" - that User IS Andras."""),
-            ("human", """Context:
+        ("human", """Context:
 {context}
 
 Question: {question}
 
 Answer:""")
-        ])
-        
-        answer = llm_client.invoke(
-            answer_prompt.format_messages(context=context, question=question)
-        ).content
-        
-        # Calculate average similarity and keyword match count for debugging
-        avg_similarity = None
-        keyword_match_count = 0
-        if relevant_summaries:
-            similarities = [s.get('similarity', 0) for s in relevant_summaries if 'similarity' in s]
-            if similarities:
-                avg_similarity = sum(similarities) / len(similarities)
-            keyword_match_count = sum(1 for s in relevant_summaries if s.get('similarity', 0) >= 0.99)
-        
-        return {
-            "status": "success",
-            "question": question,
-            "answer": answer,
-            "context_sources": len(relevant_summaries) + (1 if digital_me_summary else 0),
-            "summaries_found": len(relevant_summaries),
-            "keyword_matches": keyword_match_count,
-            "semantic_matches": len(relevant_summaries) - keyword_match_count,
-            "avg_similarity": round(avg_similarity, 3) if avg_similarity is not None else None
-        }
-        
-    except Exception as e:
-        return {
-            "status": "error",
-            "message": f"Failed to answer question: {str(e)}"
-        }
+    ])
+    
+    answer = llm_client.invoke(
+        answer_prompt.format_messages(context=context, question=question)
+    ).content
+    
+    # Calculate average similarity and keyword match count for debugging
+    avg_similarity = None
+    keyword_match_count = 0
+    if relevant_summaries:
+        similarities = [float(s.get('similarity', 0)) for s in relevant_summaries if 'similarity' in s]
+        if similarities:
+            avg_similarity = sum(similarities) / len(similarities)
+        keyword_match_count = sum(1 for s in relevant_summaries if float(s.get('similarity', 0)) >= 0.99)
+    
+    return {
+        "status": "success",
+        "question": question,
+        "answer": answer,
+        "context_sources": len(relevant_summaries) + (1 if digital_me_summary else 0),
+        "summaries_found": len(relevant_summaries),
+        "keyword_matches": keyword_match_count,
+        "semantic_matches": len(relevant_summaries) - keyword_match_count,
+        "avg_similarity": round(avg_similarity, 3) if avg_similarity is not None else None,
+        "execution_mode": "single_agent",
+        "depth": 0
+    }
 
 
 if __name__ == "__main__":

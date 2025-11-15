@@ -1,2 +1,1 @@
-# Tests package
-
+"""Tests package for Digital Me."""
