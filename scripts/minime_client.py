@@ -27,8 +27,53 @@ from langchain_core.runnables import RunnableLambda
 DEFAULT_SERVER_URL = "http://127.0.0.1:8000/mcp"
 
 
-def _extract_result(result: list) -> Any:
+def _extract_result(result) -> Any:
     """Normalize tool result (list of content items) into plain Python data."""
+    # Handle case where result might not be a list (legacy CallToolResult support)
+    if not isinstance(result, list):
+        # Check for CallToolResult-like objects first
+        result_type_name = type(result).__name__
+        if 'CallToolResult' in result_type_name or 'ToolResult' in result_type_name:
+            # Handle CallToolResult object
+            if hasattr(result, 'data') and result.data is not None:
+                return result.data
+            if hasattr(result, 'structured_content') and result.structured_content:
+                return result.structured_content
+            if hasattr(result, 'content'):
+                content = result.content
+                if isinstance(content, list):
+                    result = content
+                elif content:
+                    # Try to make it a list, but be careful
+                    try:
+                        if hasattr(content, '__iter__') and not isinstance(content, (str, bytes)):
+                            result = list(content)
+                        else:
+                            result = [content]
+                    except (TypeError, ValueError):
+                        return str(content) if content else None
+                else:
+                    return None
+            else:
+                # No content attribute, return string representation
+                return str(result) if result else None
+        else:
+            # Not a CallToolResult, try other extraction methods
+            if hasattr(result, 'data') and result.data is not None:
+                return result.data
+            if hasattr(result, 'structured_content') and result.structured_content:
+                return result.structured_content
+            # Try to convert to list only if it's actually iterable
+            try:
+                if hasattr(result, '__iter__') and not isinstance(result, (str, bytes)):
+                    result = list(result)
+                else:
+                    return str(result) if result else None
+            except (TypeError, ValueError) as e:
+                # If we can't iterate, return string representation
+                return str(result) if result else None
+    
+    # At this point, result should be a list
     if not result:
         return None
     
@@ -97,10 +142,21 @@ async def _call_mcp_answer(question: str, url: str) -> Dict[str, Any]:
     try:
         async with Client(target) as client:
             result = await client.call_tool("answer_question", {"question": question})
+        # call_tool may return a list or CallToolResult depending on fastmcp version
         data = _extract_result(result)
         if isinstance(data, dict):
             return data
         return {"answer": data}
+    except (TypeError, AttributeError) as e:
+        # Handle case where result might be an unexpected type
+        error_msg = str(e)
+        if "not iterable" in error_msg.lower() or "CallToolResult" in error_msg:
+            raise RuntimeError(
+                f"Unexpected result type from MCP server: {type(result)}. "
+                f"Result: {result}. "
+                "The server may be using an incompatible fastmcp version."
+            ) from e
+        raise
     except RuntimeError as e:
         error_msg = str(e)
         if "connection" in error_msg.lower() or "failed to connect" in error_msg.lower():

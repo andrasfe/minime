@@ -31,8 +31,55 @@ DEFAULT_ANTHROPIC_DIR = "history/anthropic"
 ProviderType = Literal["openai", "anthropic"]
 
 
-def _extract_result(result: list) -> Any:
+def _extract_result(result) -> Any:
     """Normalize tool result (list of content items) into plain Python data."""
+    # Handle case where result might not be a list (legacy CallToolResult support)
+    if not isinstance(result, list):
+        # Check for CallToolResult-like objects first
+        result_type_name = type(result).__name__
+        if 'CallToolResult' in result_type_name or 'ToolResult' in result_type_name:
+            # Handle CallToolResult object
+            if hasattr(result, 'data') and result.data is not None:
+                return result.data
+            if hasattr(result, 'structured_content') and result.structured_content:
+                return result.structured_content
+            if hasattr(result, 'content'):
+                # content might be a list or iterable
+                content = result.content
+                if isinstance(content, list):
+                    result = content
+                elif content:
+                    # Try to make it a list, but be careful
+                    try:
+                        if hasattr(content, '__iter__') and not isinstance(content, (str, bytes)):
+                            result = list(content)
+                        else:
+                            result = [content]
+                    except (TypeError, ValueError):
+                        return str(content) if content else None
+                else:
+                    return None
+            else:
+                # No content attribute, return string representation
+                return str(result) if result else None
+        else:
+            # Not a CallToolResult, try other extraction methods
+            if hasattr(result, 'data') and result.data is not None:
+                return result.data
+            if hasattr(result, 'structured_content') and result.structured_content:
+                return result.structured_content
+            # Try to convert to list only if it's actually iterable
+            try:
+                # Only try to iterate if it's actually iterable
+                if hasattr(result, '__iter__') and not isinstance(result, (str, bytes)):
+                    result = list(result)
+                else:
+                    return str(result) if result else None
+            except (TypeError, ValueError) as e:
+                # If we can't iterate, return string representation
+                return str(result) if result else None
+    
+    # At this point, result should be a list
     if not result:
         return None
     
@@ -95,12 +142,22 @@ async def _check_server(url: str) -> bool:
         return False
 
 
-async def _store_summary(url: str, summary: str) -> dict:
-    """Store a summary via the MCP server."""
+async def _store_summary(url: str, summary: str, original_date: str | None = None) -> dict:
+    """Store a summary via the MCP server.
+    
+    Args:
+        url: MCP server URL
+        summary: Conversation summary text
+        original_date: ISO format date string of original conversation (optional)
+    """
     target = _normalize_url(url)
     try:
         async with Client(target) as client:
-            result = await client.call_tool("store_chat_summary", {"summary": summary})
+            # Pass original_date if available
+            tool_args = {"summary": summary}
+            if original_date:
+                tool_args["original_date"] = original_date
+            result = await client.call_tool("store_chat_summary", tool_args)
         return _extract_result(result)
     except Exception as e:
         error_msg = str(e)
@@ -132,10 +189,15 @@ def _validate_anthropic_conversation(data: dict) -> bool:
     return all(field in data for field in required_fields)
 
 
-def _extract_openai_conversation(conversation_data: dict) -> str:
-    """Extract conversation text from OpenAI conversation format."""
+def _extract_openai_conversation(conversation_data: dict) -> tuple[str, str | None]:
+    """Extract conversation text and original date from OpenAI conversation format.
+    
+    Returns:
+        Tuple of (conversation_text, original_date_iso) where date is ISO format string or None
+    """
     messages = conversation_data.get("mapping", {})
     conversation_parts = []
+    earliest_time = None
     
     # Sort by creation time if available
     def get_create_time(item):
@@ -151,6 +213,11 @@ def _extract_openai_conversation(conversation_data: dict) -> str:
         message = message_data.get("message", {})
         if not message:
             continue
+        
+        # Extract creation time for date tracking
+        create_time = message.get("create_time")
+        if create_time and (earliest_time is None or create_time < earliest_time):
+            earliest_time = create_time
             
         author = message.get("author", {})
         if isinstance(author, dict):
@@ -185,12 +252,48 @@ def _extract_openai_conversation(conversation_data: dict) -> str:
             role_label = "User" if role == "user" else "Assistant" if role == "assistant" else role.title() if role else "Unknown"
             conversation_parts.append(f"{role_label}: {' '.join(text_parts)}")
     
-    return "\n\n".join(conversation_parts)
+    conversation_text = "\n\n".join(conversation_parts)
+    
+    # Convert timestamp to ISO format if available
+    original_date = None
+    if earliest_time:
+        try:
+            from datetime import datetime
+            # OpenAI timestamps are Unix timestamps
+            dt = datetime.fromtimestamp(earliest_time)
+            original_date = dt.isoformat()
+        except (ValueError, TypeError, OSError):
+            pass
+    
+    return conversation_text, original_date
 
 
-def _extract_anthropic_conversation(conversation_data: dict) -> str:
-    """Extract conversation text from Anthropic conversation format."""
+def _extract_anthropic_conversation(conversation_data: dict) -> tuple[str, str | None]:
+    """Extract conversation text and original date from Anthropic conversation format.
+    
+    Returns:
+        Tuple of (conversation_text, original_date_iso) where date is ISO format string or None
+    """
     conversation_parts = []
+    
+    # Extract original conversation date
+    original_date = None
+    created_at = conversation_data.get("created_at")
+    if created_at:
+        try:
+            from datetime import datetime
+            # Anthropic dates might be ISO strings or timestamps
+            if isinstance(created_at, (int, float)):
+                dt = datetime.fromtimestamp(created_at)
+            elif isinstance(created_at, str):
+                # Try parsing ISO format
+                dt = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
+            else:
+                dt = None
+            if dt:
+                original_date = dt.isoformat()
+        except (ValueError, TypeError, AttributeError):
+            pass
     
     # Add conversation name/title if available
     name = conversation_data.get("name", "")
@@ -216,11 +319,16 @@ def _extract_anthropic_conversation(conversation_data: dict) -> str:
             role_label = "User" if sender == "human" else "Assistant" if sender == "assistant" else sender.title() if sender else "Unknown"
             conversation_parts.append(f"{role_label}: {text}")
     
-    return "\n\n".join(conversation_parts)
+    conversation_text = "\n\n".join(conversation_parts)
+    return conversation_text, original_date
 
 
-def _process_file(file_path: Path, provider: ProviderType) -> list[str]:
-    """Process a conversation history file and extract summaries."""
+def _process_file(file_path: Path, provider: ProviderType) -> list[tuple[str, str | None]]:
+    """Process a conversation history file and extract summaries with dates.
+    
+    Returns:
+        List of tuples: (conversation_text, original_date_iso) where date can be None
+    """
     try:
         with open(file_path, "r", encoding="utf-8") as f:
             data = json.load(f)
@@ -229,49 +337,49 @@ def _process_file(file_path: Path, provider: ProviderType) -> list[str]:
         if isinstance(data, dict):
             # Try provider-specific format first
             if provider == "openai" and _validate_openai_conversation(data):
-                conversation_text = _extract_openai_conversation(data)
+                conversation_text, original_date = _extract_openai_conversation(data)
                 if conversation_text:
-                    return [conversation_text]
+                    return [(conversation_text, original_date)]
             elif provider == "anthropic" and _validate_anthropic_conversation(data):
-                conversation_text = _extract_anthropic_conversation(data)
+                conversation_text, original_date = _extract_anthropic_conversation(data)
                 if conversation_text:
-                    return [conversation_text]
-            # Simple summary format (provider-agnostic)
+                    return [(conversation_text, original_date)]
+            # Simple summary format (provider-agnostic) - no date available
             elif "summary" in data:
-                return [data["summary"]]
+                return [(data["summary"], None)]
             elif "text" in data:
-                return [data["text"]]
+                return [(data["text"], None)]
         elif isinstance(data, list):
             # List of items - could be conversations or summaries
             summaries = []
             for item in data:
                 if isinstance(item, str):
-                    summaries.append(item)
+                    summaries.append((item, None))
                 elif isinstance(item, dict):
                     # Check provider-specific formats
                     if provider == "openai" and _validate_openai_conversation(item):
-                        conversation_text = _extract_openai_conversation(item)
+                        conversation_text, original_date = _extract_openai_conversation(item)
                         if conversation_text:
-                            summaries.append(conversation_text)
+                            summaries.append((conversation_text, original_date))
                     elif provider == "anthropic" and _validate_anthropic_conversation(item):
-                        conversation_text = _extract_anthropic_conversation(item)
+                        conversation_text, original_date = _extract_anthropic_conversation(item)
                         if conversation_text:
-                            summaries.append(conversation_text)
-                    # Otherwise treat as simple summary format
+                            summaries.append((conversation_text, original_date))
+                    # Otherwise treat as simple summary format - no date available
                     else:
-                        summaries.append(item.get("summary", item.get("text", str(item))))
+                        summaries.append((item.get("summary", item.get("text", str(item))), None))
             return summaries
         elif isinstance(data, str):
-            # Plain text file
-            return [data.strip()]
+            # Plain text file - no date available
+            return [(data.strip(), None)]
         
-        # Fallback: convert entire JSON to string
-        return [json.dumps(data, indent=2)]
+        # Fallback: convert entire JSON to string - no date available
+        return [(json.dumps(data, indent=2), None)]
         
     except json.JSONDecodeError:
-        # Try as plain text
+        # Try as plain text - no date available
         with open(file_path, "r", encoding="utf-8") as f:
-            return [f.read().strip()]
+            return [(f.read().strip(), None)]
     except Exception as e:
         print(f"Error processing {file_path}: {e}", file=sys.stderr)
         return []
@@ -327,32 +435,34 @@ async def _load_directory(directory: Path, url: str, provider: ProviderType, dry
                 display_path = str(file_path)
         print(f"\nProcessing: {display_path}")
         
-        summaries = _process_file(file_path, provider)
+        summaries_with_dates = _process_file(file_path, provider)
         
-        if not summaries:
+        if not summaries_with_dates:
             print(f"  ⚠️  No content extracted or validation failed for {file_path.name}")
             validation_errors += 1
             continue
         
-        for i, summary in enumerate(summaries):
-            if len(summaries) > 1:
-                print(f"  Summary {i+1}/{len(summaries)}")
+        for i, (summary, original_date) in enumerate(summaries_with_dates):
+            if len(summaries_with_dates) > 1:
+                print(f"  Summary {i+1}/{len(summaries_with_dates)}")
             
             if dry_run:
-                print(f"  Would load: {summary[:100]}...")
+                date_info = f" (date: {original_date})" if original_date else ""
+                print(f"  Would load: {summary[:100]}...{date_info}")
                 loaded += 1
             else:
                 try:
-                    result = await _store_summary(url, summary)
+                    result = await _store_summary(url, summary, original_date)
                     status = result.get("status")
                     if status == "success":
-                        if len(summaries) > 1:
-                            print(f"  ✅ Loaded (ID: {result.get('chat_id')})")
+                        date_info = f" (original date: {original_date})" if original_date else ""
+                        if len(summaries_with_dates) > 1:
+                            print(f"  ✅ Loaded (ID: {result.get('chat_id')}){date_info}")
                         else:
-                            print(f"  ✅ Loaded successfully (ID: {result.get('chat_id')})")
+                            print(f"  ✅ Loaded successfully (ID: {result.get('chat_id')}){date_info}")
                         loaded += 1
                     elif status == "skipped":
-                        if len(summaries) > 1:
+                        if len(summaries_with_dates) > 1:
                             print(f"  ⏭️  Skipped (already exists, ID: {result.get('chat_id')})")
                         else:
                             print(f"  ⏭️  Skipped - already exists in database (ID: {result.get('chat_id')})")

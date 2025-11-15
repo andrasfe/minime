@@ -234,7 +234,7 @@ def init_database():
 
 
 @mcp.tool()
-def store_chat_summary(summary: str) -> dict:
+def store_chat_summary(summary: str, original_date: Optional[str] = None) -> dict:
     """
     Store a chat summary or conversation about Andras in the database for RAG retrieval.
     
@@ -246,6 +246,7 @@ def store_chat_summary(summary: str) -> dict:
     
     Args:
         summary: A summary or full text of a chat conversation about Andras
+        original_date: ISO format date string of the original conversation (optional)
         
     Returns:
         A dictionary with status and details about the stored summary, including chat_id and created_at timestamp
@@ -309,6 +310,9 @@ Output only the processed summary text, nothing else."""),
                     "original_summary": summary,
                     "summary_hash": summary_hash
                 }
+                # Add original_date to metadata if provided
+                if original_date:
+                    metadata["original_date"] = original_date
                 cur.execute("""
                     INSERT INTO chat_summaries (summary_text, embedding, metadata)
                     VALUES (%s, %s, %s)
@@ -326,13 +330,16 @@ Output only the processed summary text, nothing else."""),
         # Step 4: Update digital_me record
         update_digital_me(processed_summary)
         
-        return {
+        result = {
             "status": "success",
             "message": "Chat summary stored successfully",
             "chat_id": chat_id,
             "created_at": created_at.isoformat(),
             "processed_summary_length": len(processed_summary)
         }
+        if original_date:
+            result["original_date"] = original_date
+        return result
         
     except Exception as e:
         return {

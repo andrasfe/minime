@@ -179,6 +179,21 @@ Backups are automatically compressed and saved to the `backups/` directory.
 
 **⚠️ WARNING:** Restoring will replace all existing data. Always backup first!
 
+### Clear Database
+
+To delete all data and start fresh:
+
+```bash
+# Using the clear script (with confirmation prompt)
+./scripts/clear_db.sh
+```
+
+**⚠️ WARNING:** This will permanently delete:
+- All chat summaries
+- Digital me profile (reset to empty)
+
+The database schema will remain intact, ready for new data.
+
 ### Manual Backup/Restore
 
 **Backup:**
