@@ -508,7 +508,7 @@ def get_digital_me() -> dict:
 
 
 @mcp.tool()
-def answer_question(question: str, depth: int = 0) -> dict:
+def answer_question(question: str, depth: int = 0, breadth: int = 1) -> dict:
     """
     Answer a question about Andras using semantic search over his digital twin data.
     
@@ -516,11 +516,19 @@ def answer_question(question: str, depth: int = 0) -> dict:
     - depth=0 (basic): Single RAG query with central agent only (fast, cost-effective)
     - depth=1-5 (advanced): Multi-agent RAG with N parallel sub-agents exploring different query variants
     
+    The breadth parameter controls retrieval volume for comprehensive queries:
+    - breadth=1 (default): Retrieve up to 100 entries
+    - breadth=2-10: Use map-reduce to scan breadth*100 entries (e.g., breadth=5 scans 500 entries)
+    
+    Use higher breadth for questions like "What are ALL my questions about X?" that require scanning many entries.
+    
     Higher depth provides more comprehensive answers but costs more tokens and takes longer.
+    Higher breadth scans more of the database but also costs more tokens.
     
     Args:
         question: A question about Andras (e.g., "What domains of quantum research is Andras focused on?", "What are Andras's interests?", "What projects is Andras working on?")
         depth: Research depth (0=basic single-agent, 1-5=multi-agent with N variants). Default is 0.
+        breadth: Retrieval breadth (1=100 entries, 2-10=map-reduce with breadth*100 entries). Default is 1.
         
     Returns:
         A dictionary containing the answer about Andras and the number of context sources used
@@ -533,6 +541,16 @@ def answer_question(question: str, depth: int = 0) -> dict:
             depth = 0
         elif depth > 5:
             depth = 5
+        
+        # Validate breadth parameter
+        if breadth < 1:
+            breadth = 1
+        elif breadth > 10:
+            breadth = 10
+        
+        # If breadth > 1, use map-reduce retrieval
+        if breadth > 1:
+            return _answer_question_map_reduce(question, breadth=breadth)
         
         # depth=0 means single-agent, depth>0 means multi-agent with that many variants
         if depth == 0:
@@ -584,6 +602,51 @@ def _answer_question_multi_agent(question: str, num_variants: int = 3) -> dict:
         db_connection=conn,
         digital_me_summary=digital_me_summary,
         depth=num_variants,
+        recency_weight=recency_weight,
+        recency_decay_days=recency_decay_days
+    )
+    
+    # Return connection
+    return_db_connection(conn)
+    
+    return result
+
+
+def _answer_question_map_reduce(question: str, breadth: int = 2) -> dict:
+    """Answer question using map-reduce retrieval for large-scale queries.
+    
+    Args:
+        question: User's question
+        breadth: Retrieval multiplier (breadth * 100 entries)
+    """
+    from agents import run_map_reduce_retrieval
+    
+    # Get digital_me summary
+    conn = get_db_connection()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("SELECT summary_text FROM digital_me WHERE id = 1;")
+            digital_me_result = cur.fetchone()
+            digital_me_summary = digital_me_result['summary_text'] if digital_me_result else ""
+    finally:
+        pass  # Don't return connection yet, agents will use it
+    
+    # Get clients
+    llm_client = get_central_agent_llm()
+    embeddings_client = get_embeddings()
+    
+    # Get recency configuration
+    recency_weight = float(os.getenv("RECENCY_WEIGHT", "0.3"))
+    recency_decay_days = float(os.getenv("RECENCY_DECAY_DAYS", "180"))
+    
+    # Run map-reduce retrieval
+    result = run_map_reduce_retrieval(
+        question=question,
+        llm_client=llm_client,
+        embeddings_client=embeddings_client,
+        db_connection=conn,
+        digital_me_summary=digital_me_summary,
+        breadth=breadth,
         recency_weight=recency_weight,
         recency_decay_days=recency_decay_days
     )

@@ -113,7 +113,7 @@ history/
 
 ### Load History
 
-## WARNING -- Load process may be slow and costly depending on the model you choose for it!
+> **⚠️ WARNING**: Load process may be slow and costly depending on the model you choose for it!
 
 **Load OpenAI conversations:**
 ```bash
@@ -134,6 +134,27 @@ The script will:
 - Process all conversations automatically
 - Skip duplicates (already loaded conversations)
 - Show progress and summary
+
+### Incremental Updates
+
+The system uses **content-based duplicate detection** (SHA-256 hash of each conversation). This means:
+
+- **Run the script as many times as you want** — already-loaded conversations are automatically skipped
+- **Overwrite your export files** — just export fresh from ChatGPT/Claude and replace the old files
+- **No manual tracking needed** — the database knows what's already loaded
+
+**Typical workflow for updates:**
+
+1. Export your latest conversations from ChatGPT or Claude
+2. Overwrite/replace the files in `history/openAI/` or `history/anthropic/`
+3. Run the load script again
+
+```bash
+python scripts/load_history.py --provider openai
+# Output: "50 loaded, 450 skipped, 0 failed"
+```
+
+Only the new conversations will be processed and loaded.
 
 ## Running Inference (Asking Questions)
 
@@ -163,6 +184,42 @@ python scripts/minime_client.py --question "What are my interests?" --depth 5
 - `--depth 1-5`: Multi-agent mode with N parallel sub-agents
   - Higher depth = more comprehensive answers but higher cost and latency
   - Recommended: `--depth 3` for complex questions
+
+### Retrieval Breadth Parameter (Map-Reduce)
+
+For questions that require scanning many conversations (like "What are ALL my questions about X?"), use the `--breadth` parameter:
+
+```bash
+# Default: Scan up to 100 entries (no map-reduce)
+python scripts/minime_client.py --question "What are my interests?"
+
+# Use --breadth flag without value: defaults to 5 (500 entries)
+python scripts/minime_client.py --question "What questions about south america did I have?" --breadth
+
+# Scan 500 entries using map-reduce
+python scripts/minime_client.py --question "What questions about south america did I have?" --breadth 5
+
+# Maximum: Scan 1000 entries
+python scripts/minime_client.py --question "List all my coding projects" --breadth 10
+```
+
+**Breadth Options:**
+- No `--breadth` flag: Standard retrieval (up to 100 entries)
+- `--breadth` (no value): Map-reduce with 500 entries (breadth=5)
+- `--breadth 2-10`: Map-reduce mode scanning `breadth × 100` entries
+  - Chunks entries into batches of 50
+  - Processes batches in parallel
+  - Aggregates results into final answer
+  - Higher breadth = more comprehensive coverage but higher cost
+
+**When to Use Breadth:**
+- Questions asking for "all" or "every" instance of something
+- Retrospective queries spanning many conversations
+- When standard retrieval returns incomplete results due to the 100-entry limit
+
+**Note:** `--breadth` and `--depth` serve different purposes:
+- `--depth` controls query variant exploration (different angles on the same question)
+- `--breadth` controls retrieval volume (how much of the database to scan)
 
 **Other Output Options:**
 ```bash
@@ -420,9 +477,12 @@ docker-compose up -d
 
 ### MCP Tools
 
-1. **`store_chat_summary(summary: str)`** - Store a chat summary in the database
+1. **`store_chat_summary(summary: str, original_date?: str)`** - Store a chat summary in the database
+   - `original_date` (optional): ISO format date of the original conversation (used for recency weighting)
 2. **`get_digital_me()`** - Retrieve the comprehensive digital me summary
-3. **`answer_question(question: str)`** - Answer questions using RAG retrieval
+3. **`answer_question(question: str, depth?: int, breadth?: int)`** - Answer questions using RAG retrieval
+   - `depth` (optional, default 0): Number of parallel sub-agents (0-5)
+   - `breadth` (optional, default 1): Retrieval multiplier for map-reduce (1-10, scans breadth×100 entries)
 
 ### Architecture
 

@@ -7,13 +7,18 @@ Implements parallel sub-agent execution where:
 - Each sub-agent independently retrieves and generates
 - Central agent aggregates all sub-agent results
 
+Map-reduce retrieval for large-scale queries:
+- breadth=1 (default): Retrieve 100 entries
+- breadth>1: Retrieve breadth*100 entries, process in chunks, aggregate
+
 Based on: https://docs.langchain.com/oss/python/langgraph/agentic-rag
 """
 
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor
 import json
+import math
 
 from langgraph.graph import StateGraph, MessagesState, START, END
 from langchain_core.messages import HumanMessage, AIMessage
@@ -203,6 +208,257 @@ Answer:""")
         chunks_retrieved=len(chunks),
         confidence_score=confidence
     )
+
+
+def retrieve_chunks_with_limit(
+    query: str,
+    embeddings_client,
+    db_connection,
+    limit: int = 100,
+    recency_weight: float = 0.3,
+    recency_decay_days: float = 180.0
+) -> List[Dict[str, Any]]:
+    """Retrieve chunks from database with specified limit.
+    
+    Args:
+        query: Search query
+        embeddings_client: Embeddings client
+        db_connection: Database connection
+        limit: Maximum number of chunks to retrieve
+        recency_weight: Weight for recency boost
+        recency_decay_days: Decay half-life in days
+        
+    Returns:
+        List of chunk dictionaries
+    """
+    embedding = embeddings_client.embed_query(query)
+    embedding_array = np.array(embedding, dtype=np.float32)
+    
+    with db_connection.cursor(cursor_factory=RealDictCursor) as cur:
+        if recency_weight > 0:
+            cur.execute("""
+                SELECT 
+                    summary_text, 
+                    metadata,
+                    (1 - (embedding <=> %s::vector)) as base_similarity,
+                    CASE 
+                        WHEN metadata->>'original_date' IS NOT NULL 
+                        THEN EXTRACT(EPOCH FROM (NOW() - (metadata->>'original_date')::timestamp)) / 86400.0
+                        ELSE NULL
+                    END as days_old,
+                    CASE 
+                        WHEN metadata->>'original_date' IS NOT NULL 
+                        THEN (1 - (embedding <=> %s::vector)) * (1 + %s * EXP(-(EXTRACT(EPOCH FROM (NOW() - (metadata->>'original_date')::timestamp)) / 86400.0) / %s))
+                        ELSE (1 - (embedding <=> %s::vector))
+                    END as boosted_similarity
+                FROM chat_summaries
+                WHERE embedding <=> %s::vector < 0.7
+                ORDER BY boosted_similarity DESC
+                LIMIT %s;
+            """, (embedding_array, embedding_array, recency_weight, recency_decay_days, embedding_array, embedding_array, limit))
+        else:
+            cur.execute("""
+                SELECT summary_text, metadata,
+                       (1 - (embedding <=> %s::vector)) as base_similarity,
+                       NULL as days_old,
+                       (1 - (embedding <=> %s::vector)) as boosted_similarity
+                FROM chat_summaries
+                WHERE embedding <=> %s::vector < 0.7
+                ORDER BY embedding <=> %s::vector
+                LIMIT %s;
+            """, (embedding_array, embedding_array, embedding_array, embedding_array, limit))
+        
+        return cur.fetchall()
+
+
+def summarize_chunk_batch(
+    batch_id: int,
+    chunks: List[Dict[str, Any]],
+    question: str,
+    llm_client,
+    recency_weight: float = 0.3
+) -> Dict[str, Any]:
+    """Summarize a batch of chunks into a sub-summary.
+    
+    Args:
+        batch_id: Batch identifier
+        chunks: List of chunks to summarize
+        question: Original user question
+        llm_client: LLM client
+        recency_weight: Whether recency info is available
+        
+    Returns:
+        Dictionary with batch_id, summary, and chunk count
+    """
+    # Build context from chunks
+    context_parts = []
+    for i, chunk in enumerate(chunks, 1):
+        base_sim = float(chunk.get('base_similarity', chunk.get('similarity', 0)))
+        boosted_sim = float(chunk.get('boosted_similarity', base_sim))
+        days_old = chunk.get('days_old')
+        
+        if days_old is not None and recency_weight > 0:
+            context_parts.append(
+                f"[{i}] (sim: {base_sim:.3f} → {boosted_sim:.3f}, {int(float(days_old))}d old)\n{chunk['summary_text']}"
+            )
+        else:
+            context_parts.append(f"[{i}] (sim: {base_sim:.3f})\n{chunk['summary_text']}")
+    
+    context = "\n\n".join(context_parts)
+    
+    # Generate sub-summary
+    summarize_prompt = ChatPromptTemplate.from_messages([
+        ("system", """You are an assistant extracting relevant information about Andras from conversation summaries.
+
+CRITICAL: ALL information refers to ANDRAS. "User" means ANDRAS.
+
+Given a batch of conversation summaries and a question, extract and summarize ONLY the information relevant to answering the question. Be comprehensive but focused."""),
+        ("human", """Question: {question}
+
+Conversation Summaries (batch {batch_id}):
+{context}
+
+Extract relevant information for answering the question:""")
+    ])
+    
+    response = llm_client.invoke(
+        summarize_prompt.format_messages(question=question, batch_id=batch_id, context=context)
+    )
+    
+    return {
+        "batch_id": batch_id,
+        "summary": response.content,
+        "chunks_processed": len(chunks)
+    }
+
+
+def run_map_reduce_retrieval(
+    question: str,
+    llm_client,
+    embeddings_client,
+    db_connection,
+    digital_me_summary: str = "",
+    breadth: int = 1,
+    recency_weight: float = 0.3,
+    recency_decay_days: float = 180.0,
+    chunk_size: int = 50
+) -> Dict[str, Any]:
+    """Run map-reduce retrieval for large-scale queries.
+    
+    Args:
+        question: User's question
+        llm_client: LLM client
+        embeddings_client: Embeddings client
+        db_connection: Database connection
+        digital_me_summary: Digital twin summary
+        breadth: Multiplier for retrieval (breadth * 100 entries)
+        recency_weight: Weight for recency boost
+        recency_decay_days: Decay half-life in days
+        chunk_size: Number of entries per batch for map phase
+        
+    Returns:
+        Dictionary with answer and metadata
+    """
+    # 1. Retrieve all chunks (breadth * 100)
+    total_limit = breadth * 100
+    all_chunks = retrieve_chunks_with_limit(
+        query=question,
+        embeddings_client=embeddings_client,
+        db_connection=db_connection,
+        limit=total_limit,
+        recency_weight=recency_weight,
+        recency_decay_days=recency_decay_days
+    )
+    
+    if not all_chunks:
+        return {
+            "status": "success",
+            "question": question,
+            "answer": "No relevant information found in the database.",
+            "execution_mode": "map_reduce",
+            "breadth": breadth,
+            "total_chunks_retrieved": 0,
+            "batches_processed": 0
+        }
+    
+    # 2. MAP phase: Chunk into batches and process in parallel
+    num_batches = math.ceil(len(all_chunks) / chunk_size)
+    batches = [
+        all_chunks[i * chunk_size:(i + 1) * chunk_size]
+        for i in range(num_batches)
+    ]
+    
+    # Process batches in parallel
+    with ThreadPoolExecutor(max_workers=min(num_batches, 10)) as executor:
+        futures = [
+            executor.submit(
+                summarize_chunk_batch,
+                i,
+                batch,
+                question,
+                llm_client,
+                recency_weight
+            )
+            for i, batch in enumerate(batches)
+        ]
+        batch_results = [f.result() for f in futures]
+    
+    # 3. REDUCE phase: Aggregate all sub-summaries
+    if len(batch_results) == 1:
+        # Single batch - use its summary as-is but format nicely
+        final_answer = batch_results[0]["summary"]
+    else:
+        # Multiple batches - aggregate
+        sub_summaries = []
+        for r in batch_results:
+            sub_summaries.append(
+                f"=== Batch {r['batch_id'] + 1} ({r['chunks_processed']} conversations) ===\n{r['summary']}"
+            )
+        
+        aggregated_context = "\n\n".join(sub_summaries)
+        
+        # Add digital_me context if available
+        if digital_me_summary:
+            aggregated_context = f"=== Digital Twin Profile ===\n{digital_me_summary}\n\n{aggregated_context}"
+        
+        reduce_prompt = ChatPromptTemplate.from_messages([
+            ("system", """You are an expert at synthesizing information about Andras from multiple sources.
+
+Given extracted information from multiple batches of conversation summaries, create a comprehensive final answer.
+
+CRITICAL: ALL information refers to ANDRAS. Be thorough - include ALL relevant details from the batches.
+
+If the question asks about "all" or "every" instance of something, make sure to include everything found across all batches."""),
+            ("human", """Question: {question}
+
+Extracted Information from {num_batches} batches ({total_chunks} total conversations scanned):
+{context}
+
+Provide a comprehensive answer:""")
+        ])
+        
+        response = llm_client.invoke(
+            reduce_prompt.format_messages(
+                question=question,
+                num_batches=len(batch_results),
+                total_chunks=len(all_chunks),
+                context=aggregated_context
+            )
+        )
+        final_answer = response.content
+    
+    return {
+        "status": "success",
+        "question": question,
+        "answer": final_answer,
+        "execution_mode": "map_reduce",
+        "breadth": breadth,
+        "total_chunks_retrieved": len(all_chunks),
+        "batches_processed": len(batch_results),
+        "chunks_per_batch": chunk_size,
+        "recency_weight": recency_weight if recency_weight > 0 else None,
+        "recency_decay_days": recency_decay_days if recency_weight > 0 else None
+    }
 
 
 def create_parallel_rag_graph(

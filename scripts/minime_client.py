@@ -136,14 +136,15 @@ def _extract_question_from_prompt(prompt_value) -> str:
     return str(prompt_value)
 
 
-async def _call_mcp_answer(question: str, url: str, depth: int = 0) -> Dict[str, Any]:
+async def _call_mcp_answer(question: str, url: str, depth: int = 0, breadth: int = 1) -> Dict[str, Any]:
     """Invoke the MCP server answer_question tool."""
     target = _normalize_url(url)
     try:
         async with Client(target) as client:
             result = await client.call_tool("answer_question", {
                 "question": question,
-                "depth": depth
+                "depth": depth,
+                "breadth": breadth
             })
         # call_tool may return a list or CallToolResult depending on fastmcp version
         data = _extract_result(result)
@@ -174,7 +175,7 @@ async def _call_mcp_answer(question: str, url: str, depth: int = 0) -> Dict[str,
         raise
 
 
-def build_chain(url: str, depth: int = 0):
+def build_chain(url: str, depth: int = 0, breadth: int = 1):
     """Create a LangChain pipeline that asks the MCP server a question."""
     prompt = ChatPromptTemplate.from_messages(
         [
@@ -189,13 +190,13 @@ def build_chain(url: str, depth: int = 0):
 
     async def call_mcp_from_prompt(prompt_value) -> Dict[str, Any]:
         question = _extract_question_from_prompt(prompt_value)
-        return await _call_mcp_answer(question, url, depth)
+        return await _call_mcp_answer(question, url, depth, breadth)
 
     return prompt | RunnableLambda(call_mcp_from_prompt)
 
 
-async def run_cli(question: str, url: str, output_format: str, depth: int = 0) -> None:
-    chain = build_chain(url, depth)
+async def run_cli(question: str, url: str, output_format: str, depth: int = 0, breadth: int = 1) -> None:
+    chain = build_chain(url, depth, breadth)
     result = await chain.ainvoke({"question": question})
 
     if output_format == "json":
@@ -205,10 +206,16 @@ async def run_cli(question: str, url: str, output_format: str, depth: int = 0) -
             answer = result.get("answer") or result.get("message") or result
             print(f"Question: {question}")
             print(f"Answer: {answer}")
-            # Show depth and execution mode
-            depth_val = result.get("depth", 0)
+            # Show execution mode info
             exec_mode = result.get("execution_mode", "unknown")
-            print(f"Depth: {depth_val} ({exec_mode})")
+            if exec_mode == "map_reduce":
+                breadth_val = result.get("breadth", 1)
+                total_chunks = result.get("total_chunks_retrieved", 0)
+                batches = result.get("batches_processed", 0)
+                print(f"Mode: {exec_mode} (breadth={breadth_val}, {total_chunks} chunks in {batches} batches)")
+            else:
+                depth_val = result.get("depth", 0)
+                print(f"Depth: {depth_val} ({exec_mode})")
             context_sources = result.get("context_sources")
             if context_sources is not None:
                 print(f"Context sources: {context_sources}")
@@ -235,6 +242,15 @@ def parse_args() -> argparse.Namespace:
         help="Research depth: 0=basic single-agent (default), 1-5=multi-agent with N variants",
     )
     parser.add_argument(
+        "--breadth",
+        type=int,
+        default=1,
+        nargs="?",
+        const=5,
+        metavar="[1-10]",
+        help="Retrieval breadth: 1=100 entries (default), 2-10=map-reduce scanning breadth*100 entries. If flag is used without a value, defaults to 5.",
+    )
+    parser.add_argument(
         "--url",
         default=DEFAULT_SERVER_URL,
         help=f"MCP server base URL (default: {DEFAULT_SERVER_URL}).",
@@ -251,7 +267,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     try:
-        asyncio.run(run_cli(args.question, args.url, args.format, args.depth))
+        asyncio.run(run_cli(args.question, args.url, args.format, args.depth, args.breadth))
     except ConnectionError as e:
         print(f"❌ {e}", file=sys.stderr)
         sys.exit(1)
