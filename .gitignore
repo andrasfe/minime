@@ -10,5 +10,6 @@ backups/
 history/*/conversations_processed/
 history/openAI/*
 history/anthropic/*
+history/lmstudio/*
 all_conversations.txt
 all_summaries.txt

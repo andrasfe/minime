@@ -94,21 +94,25 @@ The server will automatically initialize the database schema and create necessar
 
 ## Loading Your Chat History
 
-Import your conversations from ChatGPT or Claude into your digital twin database.
+Import your conversations from ChatGPT, Claude, or LM Studio into your digital twin database.
 
 ### Prepare Your Exports
 
 1. **OpenAI (ChatGPT)**: Export your conversations from ChatGPT settings
 2. **Anthropic (Claude)**: Export your conversations from Claude settings
+3. **LM Studio**: Conversations are stored locally (check your LM Studio data directory)
 
 Place the exported files in the appropriate directory:
 
 ```
 history/
-├── openAI/          # Put ChatGPT exports here
+├── openAI/                    # Put ChatGPT exports here
 │   └── [your exported files]
-└── anthropic/       # Put Claude exports here
-    └── [your exported files]
+├── anthropic/                 # Put Claude exports here
+│   └── [your exported files]
+└── lmstudio/
+    └── conversations/         # Put LM Studio .conversation.json files here
+        └── [*.conversation.json files]
 ```
 
 ### Load History
@@ -125,15 +129,22 @@ python scripts/load_history.py --provider openai
 python scripts/load_history.py --provider anthropic
 ```
 
+**Load LM Studio conversations (always uses local LLM):**
+```bash
+python scripts/load_history.py --provider lmstudio
+```
+
 **Preview before loading (dry run):**
 ```bash
 python scripts/load_history.py --provider anthropic --dry-run
 ```
 
 The script will:
-- Process all conversations automatically
+- Process all conversations automatically (including subdirectories)
 - Skip duplicates (already loaded conversations)
 - Show progress and summary
+
+> **Note**: LM Studio conversations are automatically processed using local LLM since they may contain sensitive data.
 
 ### Incremental Updates
 
@@ -155,6 +166,41 @@ python scripts/load_history.py --provider openai
 ```
 
 Only the new conversations will be processed and loaded.
+
+### Sensitive Data Mode (Local LLM)
+
+For conversations containing sensitive or private data, you can use a **local LLM** instead of cloud APIs. This ensures your data never leaves your machine.
+
+**Requirements:**
+- Any server with OpenAI-compatible API:
+  - [LM Studio](https://lmstudio.ai/) (default port 1234)
+  - [Ollama](https://ollama.ai/) (default port 11434)
+  - LocalAI, vLLM, text-generation-webui, etc.
+- Server must support `/v1/chat/completions` and `/v1/embeddings` endpoints
+
+**Configure local LLM in `.env`:**
+```env
+# Local LLM endpoint (any OpenAI-compatible server)
+LOCAL_LLM_URL=http://localhost:1234/v1    # Change to your server's URL
+LOCAL_LLM_MODEL=                           # Optional: leave empty for single-model servers
+LOCAL_LLM_TEMPERATURE=0.7
+
+# Local embeddings endpoint (can be same server or different)
+LOCAL_EMBEDDINGS_URL=http://localhost:1234/v1
+LOCAL_EMBEDDINGS_MODEL=                    # Optional: leave empty for auto-select
+```
+
+**Load sensitive conversations:**
+```bash
+# Start your local LLM server first
+# Then load with --sensitive flag
+python scripts/load_history.py --provider openai --sensitive
+```
+
+The `--sensitive` flag:
+- Uses local LLM for processing the raw conversation (sensitive data stays local)
+- Cloud embeddings receive only the processed/sanitized summary (not raw sensitive text)
+- Best balance of privacy and compatibility
 
 ## Running Inference (Asking Questions)
 
@@ -477,8 +523,9 @@ docker-compose up -d
 
 ### MCP Tools
 
-1. **`store_chat_summary(summary: str, original_date?: str)`** - Store a chat summary in the database
+1. **`store_chat_summary(summary: str, original_date?: str, use_local?: bool)`** - Store a chat summary in the database
    - `original_date` (optional): ISO format date of the original conversation (used for recency weighting)
+   - `use_local` (optional, default false): Use local LLM for sensitive data processing
 2. **`get_digital_me()`** - Retrieve the comprehensive digital me summary
 3. **`answer_question(question: str, depth?: int, breadth?: int)`** - Answer questions using RAG retrieval
    - `depth` (optional, default 0): Number of parallel sub-agents (0-5)

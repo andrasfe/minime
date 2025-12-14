@@ -27,8 +27,9 @@ from mcp import types
 DEFAULT_SERVER_URL = "http://127.0.0.1:8000/mcp"
 DEFAULT_OPENAI_DIR = "history/openAI"
 DEFAULT_ANTHROPIC_DIR = "history/anthropic"
+DEFAULT_LMSTUDIO_DIR = "history/lmstudio/conversations"
 
-ProviderType = Literal["openai", "anthropic"]
+ProviderType = Literal["openai", "anthropic", "lmstudio"]
 
 
 def _extract_result(result) -> Any:
@@ -142,21 +143,24 @@ async def _check_server(url: str) -> bool:
         return False
 
 
-async def _store_summary(url: str, summary: str, original_date: str | None = None) -> dict:
+async def _store_summary(url: str, summary: str, original_date: str | None = None, use_local: bool = False) -> dict:
     """Store a summary via the MCP server.
     
     Args:
         url: MCP server URL
         summary: Conversation summary text
         original_date: ISO format date string of original conversation (optional)
+        use_local: If True, use local LLM for processing (for sensitive data)
     """
     target = _normalize_url(url)
     try:
         async with Client(target) as client:
-            # Pass original_date if available
+            # Pass original_date and use_local if applicable
             tool_args = {"summary": summary}
             if original_date:
                 tool_args["original_date"] = original_date
+            if use_local:
+                tool_args["use_local"] = True
             result = await client.call_tool("store_chat_summary", tool_args)
         return _extract_result(result)
     except Exception as e:
@@ -323,6 +327,83 @@ def _extract_anthropic_conversation(conversation_data: dict) -> tuple[str, str |
     return conversation_text, original_date
 
 
+def _validate_lmstudio_conversation(data: dict) -> bool:
+    """Validate LM Studio conversation structure."""
+    if not isinstance(data, dict):
+        return False
+    # LM Studio format has "messages" array and typically "name" and "createdAt"
+    return "messages" in data and isinstance(data.get("messages"), list)
+
+
+def _extract_lmstudio_conversation(conversation_data: dict) -> tuple[str, str | None]:
+    """Extract conversation text and original date from LM Studio conversation format.
+    
+    Returns:
+        Tuple of (conversation_text, original_date_iso) where date is ISO format string or None
+    """
+    conversation_parts = []
+    
+    # Extract original conversation date from createdAt (milliseconds timestamp)
+    original_date = None
+    created_at = conversation_data.get("createdAt")
+    if created_at:
+        try:
+            from datetime import datetime
+            # LM Studio uses milliseconds timestamp
+            if isinstance(created_at, (int, float)):
+                dt = datetime.fromtimestamp(created_at / 1000)  # Convert ms to seconds
+                original_date = dt.isoformat()
+        except (ValueError, TypeError, OSError):
+            pass
+    
+    # Add conversation name/title if available
+    name = conversation_data.get("name", "")
+    if name:
+        conversation_parts.append(f"Title: {name}")
+    
+    # Add system prompt if present
+    system_prompt = conversation_data.get("systemPrompt", "")
+    if system_prompt:
+        conversation_parts.append(f"System: {system_prompt}")
+    
+    # Extract messages
+    messages = conversation_data.get("messages", [])
+    for message in messages:
+        # LM Studio uses "versions" array for message history (regenerations/edits)
+        versions = message.get("versions", [])
+        if not versions:
+            continue
+        
+        # Use the currently selected version, or first version
+        selected_idx = message.get("currentlySelected", 0)
+        if selected_idx < len(versions):
+            version = versions[selected_idx]
+        else:
+            version = versions[0]
+        
+        role = version.get("role", "unknown")
+        content = version.get("content", [])
+        
+        # Extract text from content array
+        text_parts = []
+        if isinstance(content, list):
+            for content_item in content:
+                if isinstance(content_item, dict) and content_item.get("type") == "text":
+                    text_parts.append(content_item.get("text", ""))
+                elif isinstance(content_item, str):
+                    text_parts.append(content_item)
+        elif isinstance(content, str):
+            text_parts.append(content)
+        
+        text = " ".join(text_parts).strip()
+        if text:
+            role_label = "User" if role == "user" else "Assistant" if role == "assistant" else role.title()
+            conversation_parts.append(f"{role_label}: {text}")
+    
+    conversation_text = "\n\n".join(conversation_parts)
+    return conversation_text, original_date
+
+
 def _process_file(file_path: Path, provider: ProviderType) -> list[tuple[str, str | None]]:
     """Process a conversation history file and extract summaries with dates.
     
@@ -342,6 +423,10 @@ def _process_file(file_path: Path, provider: ProviderType) -> list[tuple[str, st
                     return [(conversation_text, original_date)]
             elif provider == "anthropic" and _validate_anthropic_conversation(data):
                 conversation_text, original_date = _extract_anthropic_conversation(data)
+                if conversation_text:
+                    return [(conversation_text, original_date)]
+            elif provider == "lmstudio" and _validate_lmstudio_conversation(data):
+                conversation_text, original_date = _extract_lmstudio_conversation(data)
                 if conversation_text:
                     return [(conversation_text, original_date)]
             # Simple summary format (provider-agnostic) - no date available
@@ -365,6 +450,10 @@ def _process_file(file_path: Path, provider: ProviderType) -> list[tuple[str, st
                         conversation_text, original_date = _extract_anthropic_conversation(item)
                         if conversation_text:
                             summaries.append((conversation_text, original_date))
+                    elif provider == "lmstudio" and _validate_lmstudio_conversation(item):
+                        conversation_text, original_date = _extract_lmstudio_conversation(item)
+                        if conversation_text:
+                            summaries.append((conversation_text, original_date))
                     # Otherwise treat as simple summary format - no date available
                     else:
                         summaries.append((item.get("summary", item.get("text", str(item))), None))
@@ -385,7 +474,7 @@ def _process_file(file_path: Path, provider: ProviderType) -> list[tuple[str, st
         return []
 
 
-async def _load_directory(directory: Path, url: str, provider: ProviderType, dry_run: bool = False):
+async def _load_directory(directory: Path, url: str, provider: ProviderType, dry_run: bool = False, use_local: bool = False):
     """Load all conversation files from a directory."""
     if not directory.exists():
         print(f"Error: Directory {directory} does not exist", file=sys.stderr)
@@ -402,6 +491,8 @@ async def _load_directory(directory: Path, url: str, provider: ProviderType, dry
         return
     
     print(f"Found {len(files)} files to process (provider: {provider})")
+    if use_local:
+        print("🔒 SENSITIVE MODE - Using local LLM (no cloud API calls)")
     if dry_run:
         print("DRY RUN MODE - No data will be loaded")
     else:
@@ -452,7 +543,7 @@ async def _load_directory(directory: Path, url: str, provider: ProviderType, dry
                 loaded += 1
             else:
                 try:
-                    result = await _store_summary(url, summary, original_date)
+                    result = await _store_summary(url, summary, original_date, use_local)
                     status = result.get("status")
                     if status == "success":
                         date_info = f" (original date: {original_date})" if original_date else ""
@@ -508,25 +599,31 @@ Examples:
   # Load Anthropic conversations
   python scripts/load_history.py --provider anthropic
 
+  # Load LM Studio conversations (always uses local LLM)
+  python scripts/load_history.py --provider lmstudio
+
   # Load from custom directory
   python scripts/load_history.py --provider openai --directory /path/to/conversations
 
   # Dry run to see what would be loaded
   python scripts/load_history.py --provider anthropic --dry-run
+
+  # Load sensitive data using local LLM (no cloud API calls)
+  python scripts/load_history.py --provider openai --sensitive
         """
     )
     parser.add_argument(
         "--provider",
         type=str,
         required=True,
-        choices=["openai", "anthropic"],
-        help="Conversation provider (openai or anthropic)"
+        choices=["openai", "anthropic", "lmstudio"],
+        help="Conversation provider (openai, anthropic, or lmstudio)"
     )
     parser.add_argument(
         "--directory",
         type=Path,
         default=None,
-        help=f"Directory containing history files (default: {DEFAULT_OPENAI_DIR} for openai, {DEFAULT_ANTHROPIC_DIR} for anthropic)"
+        help=f"Directory containing history files (default: {DEFAULT_OPENAI_DIR} for openai, {DEFAULT_ANTHROPIC_DIR} for anthropic, {DEFAULT_LMSTUDIO_DIR} for lmstudio)"
     )
     parser.add_argument(
         "--url",
@@ -538,6 +635,11 @@ Examples:
         action="store_true",
         help="Show what would be loaded without actually loading"
     )
+    parser.add_argument(
+        "--sensitive",
+        action="store_true",
+        help="Use local LLM for sensitive data (requires LOCAL_LLM_URL in .env)"
+    )
     
     args = parser.parse_args()
     
@@ -547,8 +649,17 @@ Examples:
             args.directory = Path(DEFAULT_OPENAI_DIR)
         elif args.provider == "anthropic":
             args.directory = Path(DEFAULT_ANTHROPIC_DIR)
+        elif args.provider == "lmstudio":
+            args.directory = Path(DEFAULT_LMSTUDIO_DIR)
     
-    asyncio.run(_load_directory(args.directory, args.url, args.provider, args.dry_run))
+    # LM Studio conversations are always sensitive - force local LLM
+    use_local = args.sensitive
+    if args.provider == "lmstudio":
+        use_local = True
+        if not args.sensitive:
+            print("ℹ️  LM Studio conversations are always processed with local LLM (sensitive data)")
+    
+    asyncio.run(_load_directory(args.directory, args.url, args.provider, args.dry_run, use_local))
 
 
 if __name__ == "__main__":

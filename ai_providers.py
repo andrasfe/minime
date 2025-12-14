@@ -160,3 +160,116 @@ class CohereEmbeddingsClient:
             raise RuntimeError(f"Cohere embed_documents failed: {exc}") from exc
 
 
+class LocalLLMChat:
+    """
+    Chat client for local LLMs with OpenAI-compatible API (e.g., LM Studio, Ollama).
+    No authentication required.
+    """
+
+    def __init__(
+        self,
+        base_url: str = "http://localhost:1234/v1",
+        model: Optional[str] = None,
+        temperature: float = 0.7,
+        max_retries: int = 3,
+        timeout: float = 120.0,
+    ) -> None:
+        self.base_url = base_url.rstrip("/")
+        self.endpoint = self.base_url + "/chat/completions"
+        self.model = model  # Can be None for single-model servers
+        self.temperature = temperature
+        self.max_retries = max_retries
+        self.timeout = timeout
+        self.headers = {"Content-Type": "application/json"}
+
+    def invoke(self, messages: Sequence[BaseMessage]) -> SimpleNamespace:
+        """Invoke the chat completion API and return an object with a .content attribute."""
+        payload = {
+            "messages": [_message_to_dict(message) for message in messages],
+            "temperature": self.temperature,
+        }
+        # Only include model if specified (some local servers auto-select)
+        if self.model:
+            payload["model"] = self.model
+
+        last_exc: Optional[Exception] = None
+        for attempt in range(self.max_retries):
+            try:
+                response = httpx.post(
+                    self.endpoint,
+                    headers=self.headers,
+                    json=payload,
+                    timeout=self.timeout,
+                )
+                response.raise_for_status()
+                data = response.json()
+                choices = data.get("choices") or []
+                if not choices:
+                    raise ValueError("Local LLM response did not include choices.")
+                message = choices[0].get("message", {})
+                content = message.get("content")
+                if content is None:
+                    raise ValueError("Local LLM response missing message content.")
+                return SimpleNamespace(content=content)
+            except (httpx.HTTPError, ValueError) as exc:
+                last_exc = exc
+                if attempt + 1 >= self.max_retries:
+                    break
+                backoff = 2 ** attempt
+                time.sleep(backoff)
+
+        raise RuntimeError(f"Local LLM request failed: {last_exc}") from last_exc
+
+
+class LocalEmbeddingsClient:
+    """
+    Embeddings client for local servers with OpenAI-compatible API (e.g., LM Studio, Ollama).
+    No authentication required.
+    """
+
+    def __init__(
+        self,
+        base_url: str = "http://localhost:1234/v1",
+        model: Optional[str] = None,
+    ) -> None:
+        self.base_url = base_url.rstrip("/")
+        self.endpoint = self.base_url + "/embeddings"
+        self.model = model
+        self.headers = {"Content-Type": "application/json"}
+
+    def embed_query(self, text: str) -> List[float]:
+        """Embed a single query text."""
+        return self._embed([text])[0]
+
+    def embed_documents(self, texts: Iterable[str]) -> List[List[float]]:
+        """Embed multiple documents."""
+        batch = list(texts)
+        if not batch:
+            return []
+        return self._embed(batch)
+
+    def _embed(self, texts: List[str]) -> List[List[float]]:
+        """Internal method to call the embeddings API."""
+        payload = {"input": texts}
+        if self.model:
+            payload["model"] = self.model
+
+        try:
+            response = httpx.post(
+                self.endpoint,
+                headers=self.headers,
+                json=payload,
+                timeout=60.0,
+            )
+            response.raise_for_status()
+            data = response.json()
+            embeddings_data = data.get("data", [])
+            if not embeddings_data:
+                raise ValueError("Local embeddings response did not include data.")
+            # Sort by index to ensure order matches input
+            embeddings_data.sort(key=lambda x: x.get("index", 0))
+            return [item["embedding"] for item in embeddings_data]
+        except (httpx.HTTPError, ValueError, KeyError) as exc:
+            raise RuntimeError(f"Local embeddings request failed: {exc}") from exc
+
+

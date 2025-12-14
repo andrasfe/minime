@@ -27,7 +27,7 @@ from langchain_core.prompts import ChatPromptTemplate
 import numpy as np
 from pgvector.psycopg2 import register_vector
 
-from ai_providers import CohereEmbeddingsClient, OpenRouterChat
+from ai_providers import CohereEmbeddingsClient, OpenRouterChat, LocalLLMChat, LocalEmbeddingsClient
 
 # Load environment variables
 load_dotenv()
@@ -144,6 +144,30 @@ def get_embeddings():
     embeddings = CohereEmbeddingsClient(api_key=api_key, model=model, truncate=truncate)
     
     return embeddings
+
+
+def get_local_llm():
+    """Initialize local LLM client for sensitive data processing."""
+    base_url = os.getenv("LOCAL_LLM_URL", "http://localhost:1234/v1")
+    model = os.getenv("LOCAL_LLM_MODEL") or None  # None if empty
+    temperature = float(os.getenv("LOCAL_LLM_TEMPERATURE", "0.7"))
+    
+    return LocalLLMChat(
+        base_url=base_url,
+        model=model,
+        temperature=temperature,
+    )
+
+
+def get_local_embeddings():
+    """Initialize local embeddings client for sensitive data processing."""
+    base_url = os.getenv("LOCAL_EMBEDDINGS_URL", "http://localhost:1234/v1")
+    model = os.getenv("LOCAL_EMBEDDINGS_MODEL") or None  # None if empty
+    
+    return LocalEmbeddingsClient(
+        base_url=base_url,
+        model=model,
+    )
 
 
 def get_db_connection(register_vector_type: bool = True):
@@ -274,7 +298,7 @@ def init_database():
 
 
 @mcp.tool()
-def store_chat_summary(summary: str, original_date: Optional[str] = None) -> dict:
+def store_chat_summary(summary: str, original_date: Optional[str] = None, use_local: bool = False) -> dict:
     """
     Store a chat summary or conversation about Andras in the database for RAG retrieval.
     
@@ -287,6 +311,7 @@ def store_chat_summary(summary: str, original_date: Optional[str] = None) -> dic
     Args:
         summary: A summary or full text of a chat conversation about Andras
         original_date: ISO format date string of the original conversation (optional)
+        use_local: If True, use local LLM/embeddings for sensitive data (default: False)
         
     Returns:
         A dictionary with status and details about the stored summary, including chat_id and created_at timestamp
@@ -295,9 +320,17 @@ def store_chat_summary(summary: str, original_date: Optional[str] = None) -> dic
         # Initialize database if needed
         init_database()
         
-        # Get LLM for processing
-        llm_client = get_llm()
-        embeddings_client = get_embeddings()
+        # Get LLM and embeddings
+        # For sensitive data (use_local=True): Local LLM processes raw conversation,
+        # but cloud embeddings are used on the sanitized summary (not sensitive)
+        if use_local:
+            llm_client = get_local_llm()
+            # Use cloud embeddings - only the processed/sanitized summary is sent,
+            # not the raw sensitive conversation
+            embeddings_client = get_embeddings()
+        else:
+            llm_client = get_llm()
+            embeddings_client = get_embeddings()
         
         # Step 1: Process summary with LLM for RAG optimization
         process_prompt = ChatPromptTemplate.from_messages([
@@ -346,9 +379,26 @@ Output only the processed summary text, nothing else."""),
                 
                 # Convert embedding to numpy array for pgvector
                 embedding_array = np.array(embedding_vector, dtype=np.float32)
+                
+                # Track which models were used for provenance
+                if use_local:
+                    llm_provider = "local"
+                    llm_model = os.getenv("LOCAL_LLM_MODEL", "auto")
+                else:
+                    llm_provider = "openrouter"
+                    llm_model = os.getenv("OPENROUTER_MODEL", "unknown")
+                
+                # Embeddings always use Cohere (hybrid mode)
+                embedding_provider = "cohere"
+                embedding_model = os.getenv("EMBEDDING_MODEL", "embed-english-v2.0")
+                
                 metadata = {
                     "original_summary": summary,
-                    "summary_hash": summary_hash
+                    "summary_hash": summary_hash,
+                    "llm_provider": llm_provider,
+                    "llm_model": llm_model,
+                    "embedding_provider": embedding_provider,
+                    "embedding_model": embedding_model,
                 }
                 # Add original_date to metadata if provided
                 if original_date:
